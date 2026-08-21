@@ -36,8 +36,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { SidebarMenuToggle } from "@/components/headers/menu-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
-import { HEADER_INNER_HEIGHT, MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-context";
+import { useSettings } from "@/hooks/use-settings";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import { useForgeSearchQuery } from "@/git/use-forge-search-query";
 import { useCheckoutStatusQuery } from "@/git/use-status-query";
@@ -2292,6 +2293,17 @@ export function NewWorkspaceScreen({
     [isCompact, contentBottomInset],
   );
 
+  // The measure lands on the Animated.View that KeyboardTranslateView renders on
+  // native, which must not carry a Unistyles theme-factory style (see
+  // docs/unistyles.md — the two runtimes race on the same native node and crash on
+  // theme change). Read the setting directly and pass the measure through as a plain
+  // inline style instead of the `theme.layout` token.
+  const contentWidth = useSettings((settings) => settings.contentWidth);
+  const centeredStyle = useMemo(
+    () => [animatedStaticStyles.centered, { maxWidth: contentWidth }],
+    [contentWidth],
+  );
+
   const agentControlsWithDisabled = useMemo(
     () =>
       composerState
@@ -2377,7 +2389,7 @@ export function NewWorkspaceScreen({
       <ScreenHeader left={screenHeaderLeft} borderless />
       <ComposerViewport style={contentStyle} bottomInset={contentBottomInset} centered={!isCompact}>
         <TitlebarDragRegion />
-        <KeyboardTranslateView style={animatedStaticStyles.centered}>
+        <KeyboardTranslateView style={centeredStyle}>
           <ComposerViewportContent style={animatedStaticStyles.form}>
             <ScrollView style={animatedStaticStyles.setup} keyboardShouldPersistTaps="handled">
               <View style={styles.composerTitleContainer}>
@@ -2457,7 +2469,6 @@ const animatedStaticStyles = RNStyleSheet.create({
   centered: {
     flexShrink: 1,
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
   },
   form: {
     flexShrink: 1,
