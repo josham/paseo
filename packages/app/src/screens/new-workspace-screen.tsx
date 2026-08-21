@@ -27,8 +27,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { SidebarMenuToggle } from "@/components/headers/menu-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
-import { HEADER_INNER_HEIGHT, MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-context";
+import { useSettings } from "@/hooks/use-settings";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import { useForgeSearchQuery } from "@/git/use-forge-search-query";
 import { useCheckoutStatusQuery } from "@/git/use-status-query";
@@ -2178,9 +2179,14 @@ export function NewWorkspaceScreen({
     mode: "translate",
   });
 
+  // This lands on a Reanimated `Animated.View`, which must not carry a Unistyles
+  // theme-factory style (see docs/unistyles.md — the two runtimes race on the same
+  // native node and crash on theme change). Read the setting directly and pass the
+  // measure through as a plain inline style instead of the `theme.layout` token.
+  const contentWidth = useSettings((settings) => settings.contentWidth);
   const centeredStyle = useMemo(
-    () => [animatedStaticStyles.centered, composerKeyboardStyle],
-    [composerKeyboardStyle],
+    () => [animatedStaticStyles.centered, { maxWidth: contentWidth }, composerKeyboardStyle],
+    [composerKeyboardStyle, contentWidth],
   );
 
   const agentControlsWithDisabled = useMemo(
@@ -2341,7 +2347,6 @@ export function NewWorkspaceScreen({
 const animatedStaticStyles = RNStyleSheet.create({
   centered: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
   },
 });
 
