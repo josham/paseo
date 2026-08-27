@@ -68,16 +68,20 @@ npm run build:desktop -- --publish never --linux --x64 \
   -c.publish.owner=josham -c.publish.repo=paseo
 ```
 
-On Arch the `.deb` and `.rpm` targets fail with `libcrypt.so.1: cannot open shared
-object file` — electron-builder's bundled fpm is built against an older glibc. Install
+On Arch the `.deb` target fails with `libcrypt.so.1: cannot open shared object file` —
+electron-builder's bundled fpm is built against an older glibc. Install
 `libxcrypt-compat`, or ignore it: the AppImage and tar.gz are produced before fpm runs,
 and CI builds on ubuntu where the library is present.
+
+The release builds AppImage, deb and tar.gz — no rpm. `rpmbuild` rejects a package name
+containing a space, so "Paseo Edge" produces an invalid spec. Keeping the readable
+product name beat keeping an rpm none of us installs.
 
 ## Installing
 
 Download `Paseo-Edge-x86_64.AppImage`, `chmod +x`, run it. It installs alongside a stock
 Paseo — different app id (`sh.paseo.desktop.edge`), different desktop entry, different
-deb/rpm package name — and updates itself from this repo's releases.
+deb package name — and updates itself from this repo's releases.
 
 What it shares with a stock Paseo, deliberately: `~/.paseo` (so it sees your real
 projects and agents) and `~/.config/Paseo` (Electron settings and window state, because
@@ -94,9 +98,17 @@ configuration expects. Which upstream commit a build came from is in the release
 
 ## What the CI does and does not run
 
-Upstream's workflows are disabled in this fork, so pushing branches here runs nothing
-except `Edge Linux Release` on an `edge-v*` tag. This does not affect PRs sent upstream:
-those run in getpaseo's repo, against getpaseo's CI.
+Pushing a branch here runs nothing: upstream's `ci.yml` only triggers on `main` and on
+PRs into it, and our `edge-v*` tags match none of upstream's tag triggers. This does not
+affect PRs sent upstream — those run in getpaseo's repo, against getpaseo's CI.
+
+The one upstream workflow that does fire here is `deploy-website.yml`, on
+`release: published`, and it fails for want of Cloudflare secrets. GitHub will not let
+you disable a workflow it has never run, so it has to fail once and then be turned off:
+
+```bash
+gh api -X PUT repos/josham/paseo/actions/workflows/deploy-website.yml/disable
+```
 
 Only Linux x64 is built. Windows would be one more job and needs no secrets; macOS needs
 an Apple Developer certificate to produce something users can open without fighting

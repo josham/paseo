@@ -113,7 +113,13 @@ jobs:
           # ${arch}/${ext}/${version} are electron-builder tokens — single-quote them so
           # the shell leaves them alone. executableName stays "Paseo": after-pack.js and
           # e2e/packaged-app-smoke.js hardcode it, and the smoke test is worth keeping.
-          npm run build:desktop -- --publish never --linux --x64 \
+          #
+          # Targets are listed explicitly to drop the rpm upstream builds: rpmbuild
+          # rejects a package name containing a space, so "Paseo Edge" produces an
+          # invalid spec. The AppImage is the artifact that self-updates and the one
+          # we actually install; keeping the readable product name is worth more than
+          # an rpm, and the alternative was mangling it to "Paseo-Edge" everywhere.
+          npm run build:desktop -- --publish never --linux AppImage deb tar.gz --x64 \
             -c.appId=sh.paseo.desktop.edge \
             -c.productName="Paseo Edge" \
             -c.appImage.artifactName='Paseo-Edge-${arch}.${ext}' \
