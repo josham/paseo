@@ -85,9 +85,12 @@ deb package name — and updates itself from this repo's releases.
 
 What it shares with a stock Paseo, deliberately: `~/.paseo` (so it sees your real
 projects and agents) and `~/.config/Paseo` (Electron settings and window state, because
-`packages/desktop/src/main.ts` hardcodes the app name). The shared single-instance lock
-means you cannot run both at once, which is the behaviour you want — they would
-otherwise fight over the same daemon.
+`packages/desktop/src/main.ts` hardcodes the app name via `app.setName`).
+
+The shared userData means a shared single-instance lock. Launching Edge while stock
+Paseo is running does not open an Edge window — it focuses the running stock Paseo and
+exits, which looks like the AppImage did nothing. Quit the stock app first. This is
+worth keeping: the two would otherwise fight over the same daemon on port 6767.
 
 ## Versions
 
@@ -102,13 +105,17 @@ Pushing a branch here runs nothing: upstream's `ci.yml` only triggers on `main` 
 PRs into it, and our `edge-v*` tags match none of upstream's tag triggers. This does not
 affect PRs sent upstream — those run in getpaseo's repo, against getpaseo's CI.
 
-The one upstream workflow that does fire here is `deploy-website.yml`, on
-`release: published`, and it fails for want of Cloudflare secrets. GitHub will not let
-you disable a workflow it has never run, so it has to fail once and then be turned off:
+Upstream's workflow files are present on `main` but GitHub has never registered them in
+this fork — `gh api repos/josham/paseo/actions/workflows` lists only
+`edge-linux-release.yml`. Publishing `edge-v1.0.0` did not fire `deploy-website.yml`
+despite its `release: published` trigger. If one ever does wake up, disable it:
 
 ```bash
 gh api -X PUT repos/josham/paseo/actions/workflows/deploy-website.yml/disable
 ```
+
+That endpoint 404s on a workflow GitHub has not registered, so it only works after the
+workflow has run at least once.
 
 Only Linux x64 is built. Windows would be one more job and needs no secrets; macOS needs
 an Apple Developer certificate to produce something users can open without fighting
