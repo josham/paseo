@@ -69,11 +69,21 @@ merge_branch() {
   fi
 
   if ! git merge --no-ff --no-edit -m "edge: merge $branch" "$ref"; then
-    # A conflict rerere has seen before comes back already resolved and staged, but
-    # git still reports the merge as failed and leaves it for you to commit. Nothing
-    # unmerged means that is what happened, so finish the merge and carry on — this
-    # is the case that keeps a rebuild unattended once each conflict is fixed once.
-    if [[ -z "$(git diff --name-only --diff-filter=U)" ]]; then
+    # rerere replays a resolution it has seen before into the working tree, but
+    # leaves the index unmerged unless rerere.autoUpdate is set, and git reports the
+    # merge as failed either way. If every conflicted file came back without
+    # markers, there is nothing left to decide: stage it and finish the merge. This
+    # is what keeps a rebuild unattended once each conflict has been fixed once.
+    mapfile -t unmerged < <(git ls-files --unmerged | awk '{ print $4 }' | sort -u)
+    replayed=$(( ${#unmerged[@]} > 0 ))
+    for path in "${unmerged[@]}"; do
+      if [[ ! -f "$path" ]] || grep -q '^<<<<<<< ' "$path"; then
+        replayed=0
+        break
+      fi
+    done
+    if (( replayed )); then
+      git add -- "${unmerged[@]}"
       # No hooks: this branch is generated from already-reviewed branches, and the
       # repo's pre-commit runs a full-workspace typecheck on every commit.
       git commit --quiet --no-edit --no-verify
