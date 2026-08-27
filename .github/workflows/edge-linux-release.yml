@@ -1,0 +1,193 @@
+# Paseo Edge — the josham/paseo fork's own Linux desktop build.
+#
+# This file exists only on edge/tooling (and therefore on edge/main). Upstream never
+# has it, so it never conflicts on a rebase. It deliberately mirrors the publish-linux
+# job of desktop-release.yml rather than reusing it, because upstream's version parser
+# rejects our tag shape and its electron-builder config publishes to getpaseo.
+#
+# The edge-v* tag namespace matches none of upstream's triggers (v*, app-v*,
+# desktop-*-v*, android-v*), so tagging a release here starts this workflow and
+# nothing else.
+
+name: Edge Linux Release
+
+on:
+  push:
+    tags:
+      - "edge-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing edge-v tag to build (e.g. edge-v1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: edge-linux-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  EDGE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  DESKTOP_PACKAGE_PATH: "packages/desktop"
+
+jobs:
+  publish-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.EDGE_TAG }}
+
+      - name: Resolve version and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${EDGE_TAG#edge-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a tag like edge-v1.2.3, got '$EDGE_TAG'"
+            exit 1
+          fi
+          echo "EDGE_VERSION=$version" >> "$GITHUB_ENV"
+
+          # rebuild.sh layers each merge onto the first-parent chain, so the run of
+          # "edge: merge" commits at the tip is exactly our stack and what precedes it
+          # is the upstream commit this build is based on.
+          merges="$(git log --first-parent --format=%s HEAD | grep -c '^edge: merge ' || echo 0)"
+          base="$(git rev-parse --short "HEAD~${merges}")"
+
+          {
+            echo "Linux desktop build of Paseo Edge — a modified build of Paseo maintained at"
+            echo "[josham/paseo](https://github.com/josham/paseo). Not affiliated with or endorsed by getpaseo."
+            echo
+            echo "Based on upstream \`getpaseo/paseo@$base\`, plus:"
+            echo
+            git log --first-parent --format='%s' HEAD | grep '^edge: merge ' | sed 's/^edge: merge /- /'
+            echo
+            echo "Installs alongside a stock Paseo (separate app id and desktop entry). The AppImage"
+            echo "self-updates from this repo's releases."
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Set desktop package version from tag
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const version = process.env.EDGE_VERSION;
+          if (!version) throw new Error('EDGE_VERSION env var is missing');
+
+          const packageJsonPath = path.join(process.env.DESKTOP_PACKAGE_PATH, 'package.json');
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          packageJson.version = version;
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+
+      - name: Install Linux smoke display
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth
+
+      - name: Build desktop release
+        shell: bash
+        env:
+          EP_GH_IGNORE_TIME: true
+          PASEO_DESKTOP_SMOKE: "1"
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
+        run: |
+          set -euo pipefail
+          # ${arch}/${ext}/${version} are electron-builder tokens — single-quote them so
+          # the shell leaves them alone. executableName stays "Paseo": after-pack.js and
+          # e2e/packaged-app-smoke.js hardcode it, and the smoke test is worth keeping.
+          #
+          # Targets are listed explicitly to drop the rpm upstream builds: rpmbuild
+          # rejects a package name containing a space, so "Paseo Edge" produces an
+          # invalid spec. The AppImage is the artifact that self-updates and the one
+          # we actually install; keeping the readable product name is worth more than
+          # an rpm, and the alternative was mangling it to "Paseo-Edge" everywhere.
+          npm run build:desktop -- --publish never --linux AppImage deb tar.gz --x64 \
+            -c.appId=sh.paseo.desktop.edge \
+            -c.productName="Paseo Edge" \
+            -c.appImage.artifactName='Paseo-Edge-${arch}.${ext}' \
+            -c.linux.artifactName='Paseo-Edge-${version}-${arch}.${ext}' \
+            -c.publish.owner=josham \
+            -c.publish.repo=paseo \
+            -c.publish.releaseType=release \
+            -c.publish.channel=latest
+
+      - name: Upload packaged smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-linux-x64
+          path: ${{ runner.temp }}/desktop-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify the updater feed points at this fork
+        shell: bash
+        run: |
+          set -euo pipefail
+          # electron-builder bakes publish config into app-update.yml. If the -c overrides
+          # above ever stop applying, the build would silently update users to upstream.
+          feed="$(find "$DESKTOP_PACKAGE_PATH/release" -name app-update.yml -print -quit)"
+          if [[ -z "$feed" ]]; then
+            echo "::error::app-update.yml not found in the packaged output"
+            exit 1
+          fi
+          cat "$feed"
+          grep -q '^owner: josham$' "$feed" || { echo "::error::app-update.yml owner is not josham"; exit 1; }
+          grep -q '^repo: paseo$' "$feed" || { echo "::error::app-update.yml repo is not paseo"; exit 1; }
+
+      - name: Stamp instant rollout
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/stamp-rollout.mjs \
+            --release-date "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")" \
+            --rollout-hours 0 \
+            "$DESKTOP_PACKAGE_PATH/release/latest-linux.yml"
+          cat "$DESKTOP_PACKAGE_PATH/release/latest-linux.yml"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$EDGE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$EDGE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Paseo Edge $EDGE_VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+          release_dir="$DESKTOP_PACKAGE_PATH/release"
+          files=()
+          while IFS= read -r -d '' f; do
+            files+=("$f")
+          done < <(find "$release_dir" -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name 'latest-linux.yml' \) \
+            -print0 | sort -z)
+
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::No release artifacts found in $release_dir"
+            exit 1
+          fi
+          printf 'uploading %s\n' "${files[@]}"
+          gh release upload "$EDGE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
