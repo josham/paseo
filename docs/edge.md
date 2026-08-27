@@ -48,7 +48,30 @@ the [releases page](https://github.com/josham/paseo/releases).
 If two of our branches conflict, `rebuild.sh` stops and leaves the conflict in the tree.
 Resolve it, `git commit`, and re-run. `git config rerere.enabled true` (do this once)
 makes git replay that resolution on later rebuilds, so a recurring conflict costs one
-fix rather than one per release.
+fix rather than one per release — `rebuild.sh` stages what rerere replays and carries
+on, so the second rebuild of the same stack is unattended.
+
+`feat/configurable-content-width` and `fix/numeric-settings-clamp-resync` are the
+standing example: one extracts `FontSizeRow` into its own module, the other renames it
+in place to `PixelSizeRow`. The recorded resolution imports the extracted component
+under the feature's name and gives `commitContentWidth` the same "return the clamped
+value" contract as the font-size commits. It goes away when either PR lands upstream.
+
+## Building locally
+
+To check a build without cutting a release:
+
+```bash
+npm run build:desktop -- --publish never --linux --x64 \
+  -c.appId=sh.paseo.desktop.edge -c.productName="Paseo Edge" \
+  -c.appImage.artifactName='Paseo-Edge-${arch}.${ext}' \
+  -c.publish.owner=josham -c.publish.repo=paseo
+```
+
+On Arch the `.deb` and `.rpm` targets fail with `libcrypt.so.1: cannot open shared
+object file` — electron-builder's bundled fpm is built against an older glibc. Install
+`libxcrypt-compat`, or ignore it: the AppImage and tar.gz are produced before fpm runs,
+and CI builds on ubuntu where the library is present.
 
 ## Installing
 
