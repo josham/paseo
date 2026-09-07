@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -9,6 +10,8 @@ import pLimit, { type LimitFunction } from "p-limit";
 
 import { expandTilde } from "../../utils/path.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
+import type { ProcessLaunchStrategy } from "../devcontainer/launch-strategy.js";
+import { ContainerNotRunningError } from "../devcontainer/launch-strategy-registry.js";
 import {
   filterSelectableAgentModels,
   type AgentClient,
@@ -55,6 +58,8 @@ const DEFAULT_REFRESH_TIMEOUT_MS = 120_000;
 const MAX_REFRESH_TIMEOUT_MS = 2_147_483_647;
 const DEFAULT_DIAGNOSTIC_TIMEOUT_MS = 120_000;
 const PROVIDER_REFRESH_DEADLINE_ENV = "PASEO_PROVIDER_REFRESH_TIMEOUT_MS";
+/** Namespace for a probe's private snapshot; never a real cwd. */
+const PROBE_SNAPSHOT_PREFIX = "\u0000probe:";
 export const GLOBAL_PROVIDER_SNAPSHOT_KEY = "paseo:global";
 
 function validRefreshDeadline(value: unknown): number | undefined {
@@ -121,10 +126,23 @@ export interface ProviderSnapshotManagerOptions {
   refreshTimeoutMs?: number;
   diagnosticTimeoutMs?: number;
   openCodeBridge?: OpenCodeBridge;
+  resolveLaunchStrategy?: (cwd: string) => Promise<ProcessLaunchStrategy | null>;
 }
 
 interface ProviderSnapshotRefreshOptions {
   cwd: string;
+  providers?: AgentProvider[];
+  /**
+   * Run the probes in this environment instead of resolving one from the
+   * workspace at this cwd. A LocalLaunchStrategy asks for the host explicitly.
+   */
+  launchStrategy?: ProcessLaunchStrategy;
+}
+
+export interface ProviderSnapshotProbeOptions {
+  cwd: string;
+  /** Run every provider probe inside this environment. */
+  launchStrategy: ProcessLaunchStrategy;
   providers?: AgentProvider[];
 }
 
@@ -198,6 +216,8 @@ interface ProviderLoadOptions {
   providers: AgentProvider[];
   catalogScope: ProviderCatalogScope;
   force: boolean;
+  /** Run the probes in this environment instead of resolving one per cwd. */
+  launchStrategy?: ProcessLaunchStrategy;
 }
 interface CatalogBinding {
   key?: string;
@@ -241,6 +261,7 @@ export class ProviderSnapshotManager {
   private destroyed = false;
   private refreshTimeoutMs: number;
   private diagnosticTimeoutMs: number;
+  private readonly resolveLaunchStrategy?: (cwd: string) => Promise<ProcessLaunchStrategy | null>;
   private readonly logger: Logger;
   private readonly workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   private readonly managedProcesses?: ManagedProcessRegistry;
@@ -264,6 +285,7 @@ export class ProviderSnapshotManager {
     this.managedProcesses = options.managedProcesses;
     this.openCodeBridge = options.openCodeBridge;
     this.isDev = options.isDev === true;
+    this.resolveLaunchStrategy = options.resolveLaunchStrategy;
     this.extraClients = options.extraClients ?? {};
     this.runtimeSettings = options.runtimeSettings;
     this.providerOverrides = options.providerOverrides;
@@ -294,7 +316,42 @@ export class ProviderSnapshotManager {
     const target = createWorkspaceSnapshotTarget(snapshotCwd);
     const providers = this.resolveRefreshProviders(options.providers);
     const providersToRefresh = providers ?? this.getProviderIds();
-    await this.refreshProviders(target, providersToRefresh);
+    await this.refreshProviders(target, providersToRefresh, options.launchStrategy);
+  }
+
+  /**
+   * Probe every provider inside a container without touching the snapshot the
+   * workspaces at this cwd share. The results are returned to the caller — the
+   * probe container is torn down straight after, so nothing that arrives later
+   * could reproduce them.
+   */
+  async probeSnapshotForCwd(
+    options: ProviderSnapshotProbeOptions,
+  ): Promise<ProviderSnapshotEntry[]> {
+    const cwd = resolveSnapshotCwd(options.cwd);
+    // A private snapshot key keeps the probe's loading states, results and
+    // change events out of the shared store.
+    const snapshotCwd = `${PROBE_SNAPSHOT_PREFIX}${randomUUID()}:${cwd}`;
+    const target: ProviderSnapshotTarget = {
+      snapshotCwd,
+      catalogScope: { scope: "workspace", cwd },
+    };
+    const providers = options.providers ?? this.getProviderIds();
+    try {
+      await this.loadProviders({
+        snapshotCwd,
+        catalogScope: target.catalogScope,
+        providers,
+        force: true,
+        launchStrategy: options.launchStrategy,
+      });
+      // Read the target directly: getSnapshotForTarget would warm providers
+      // back up on a key that is about to be discarded.
+      return this.getOrCreateTarget(snapshotCwd).snapshot.records.map((record) => record.entry);
+    } finally {
+      this.targets.delete(snapshotCwd);
+      this.catalogs.delete(snapshotCwd);
+    }
   }
 
   async refreshSettingsSnapshot(
@@ -856,15 +913,16 @@ export class ProviderSnapshotManager {
   private async refreshProviders(
     target: ProviderSnapshotTarget,
     providers: AgentProvider[],
+    launchStrategy?: ProcessLaunchStrategy,
   ): Promise<void> {
     await this.loadProviders({
       snapshotCwd: target.snapshotCwd,
       catalogScope: target.catalogScope,
       providers,
       force: true,
+      launchStrategy,
     });
   }
-
   private resolveProvidersToWarm(cwd: string, providers?: AgentProvider[]): AgentProvider[] {
     this.getOrCreateTarget(cwd);
     // Identity is provider-owned and may change without a daemon config reload.
@@ -891,6 +949,7 @@ export class ProviderSnapshotManager {
     return binding.promise;
   }
 
+  // oxlint-disable-next-line eslint(complexity): key binding, cache reuse and container resolution
   private async resolveCatalog(
     options: ProviderLoadOptions & { provider: AgentProvider },
     binding: CatalogBinding,
@@ -902,7 +961,33 @@ export class ProviderSnapshotManager {
     if (!definition.enabled) return;
     const currentBinding = () => this.targets.get(snapshotCwd)?.bindings.get(provider);
     const client = this.ensureClient(provider, definition);
-    const catalogOptions = createFetchCatalogOptions(options.catalogScope, force);
+    let catalogOptions = createFetchCatalogOptions(options.catalogScope, force);
+    // A workspace catalogue must answer for the container that will run the
+    // tool, not for the host. An explicit strategy (the new-workspace probe)
+    // wins; otherwise ask the registry what this cwd runs in.
+    if (catalogOptions.scope === "workspace") {
+      try {
+        const launchStrategy =
+          options.launchStrategy ??
+          (this.resolveLaunchStrategy
+            ? ((await this.resolveLaunchStrategy(catalogOptions.cwd)) ?? undefined)
+            : undefined);
+        if (launchStrategy) catalogOptions = { ...catalogOptions, launchStrategy };
+      } catch (error) {
+        // A container that is merely stopped leaves the tool list unknown, which
+        // is not a failure the user can act on — "error" paints the picker red.
+        if (currentBinding() !== binding) return currentBinding()?.promise;
+        binding.force = false;
+        binding.key = undefined;
+        binding.failure = identifyEntry({
+          ...this.generation.providerStates.get(provider)!.initial.entry,
+          status: "unavailable",
+          error: toErrorMessage(error),
+        });
+        this.publishTargets([snapshotCwd]);
+        return;
+      }
+    }
     let key: string;
     try {
       const sharedKey = client.getCatalogCacheKey
@@ -1002,7 +1087,15 @@ export class ProviderSnapshotManager {
           const available = await context.runActivity("availability", () =>
             raceProviderRefreshAbort(
               context.signal,
-              client.isAvailable(context.signal, catalogOptions),
+              client.isAvailable({
+                signal: context.signal,
+                catalog: catalogOptions,
+                // The strategy goes with the question: a provider gating on a
+                // binary answers for the container, while gates that have
+                // nothing to do with the filesystem still apply.
+                launchStrategy:
+                  catalogOptions.scope === "workspace" ? catalogOptions.launchStrategy : undefined,
+              }),
             ),
           );
           if (!available) {
@@ -1028,6 +1121,18 @@ export class ProviderSnapshotManager {
         fetchedAt: new Date().toISOString(),
       });
     } catch (error) {
+      if (error instanceof ContainerNotRunningError) {
+        // Not a failure: the container simply isn't up, so its tool list is
+        // unknown. Reporting every provider as an error would paint the model
+        // picker red for a workspace that is merely stopped.
+        setEntry({
+          ...base,
+          status: "unavailable",
+          enabled: true,
+          error: toErrorMessage(error),
+        });
+        return;
+      }
       const emitted = setEntry({
         ...base,
         status: "error",

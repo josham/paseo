@@ -29,6 +29,12 @@ export interface CreateWorktreeCoreInput {
   paseoHome?: string;
   worktreesRoot?: string;
   runSetup?: boolean;
+  /**
+   * Link the worktree by relative path, so a container can use it. Decided by
+   * the caller, which knows whether this workspace is container-backed and
+   * what the image's git can read.
+   */
+  relativePaths?: boolean;
 }
 
 export interface CreateWorktreeCoreDeps {
@@ -123,6 +129,7 @@ async function createWorktreeCoreWithPriority(
       runSetup: input.runSetup ?? true,
       paseoHome: input.paseoHome,
       worktreesRoot: input.worktreesRoot,
+      ...(input.relativePaths === undefined ? {} : { relativePaths: input.relativePaths }),
     }),
     intent,
     repoRoot,

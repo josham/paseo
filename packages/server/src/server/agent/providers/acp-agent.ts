@@ -80,6 +80,7 @@ import {
   type AgentRuntimeInfo,
   type AgentSession,
   type AgentSessionConfig,
+  type ProviderAvailabilityOptions,
   type AgentSlashCommand,
   type AgentStreamEvent,
   type AgentTimelineItem,
@@ -118,7 +119,10 @@ import {
   buildStringCommandShellInvocation,
   createStringCommandShellEnvOverlay,
 } from "../../../utils/string-command-shell.js";
-import { spawnProcess } from "../../../utils/spawn.js";
+import {
+  LocalLaunchStrategy,
+  type ProcessLaunchStrategy,
+} from "../../devcontainer/launch-strategy.js";
 import {
   type DiagnosticEntry,
   toDiagnosticErrorMessage,
@@ -238,6 +242,7 @@ export const DEFAULT_ACP_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: false,
   supportsRewindFiles: false,
   supportsRewindBoth: false,
+  supportsIsolatedLaunch: true,
 };
 
 function acpSessionListRequest(cursor: string | null | undefined, cwd: string | undefined) {
@@ -276,6 +281,8 @@ export function buildACPClientCapabilities(
 // sign-in URL in the browser) when probing an ACP agent for models/modes.
 // NO_BROWSER is honored by Gemini CLI; other ACP agents ignore it.
 const PROBE_ENV: Record<string, string> = { NO_BROWSER: "true" };
+/** Host spawning is just the local strategy — no need for a parallel branch. */
+const LOCAL_LAUNCH_STRATEGY = new LocalLaunchStrategy();
 const ACP_DIAGNOSTIC_PHASE_TIMEOUT_MS = 20_000;
 const ACP_PROBE_CLOSE_TIMEOUT_MS = 2_000;
 const ACP_IMPORT_HISTORY_LOAD_TIMEOUT_MS = 30_000;
@@ -473,6 +480,7 @@ interface ACPAgentSessionOptions {
   handle?: AgentPersistenceHandle;
   agentId?: string;
   launchEnv?: Record<string, string>;
+  launchStrategy?: ProcessLaunchStrategy;
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
@@ -962,6 +970,7 @@ export class ACPAgentClient implements AgentClient {
         capabilities: this.capabilities,
         agentId: launchContext?.agentId,
         launchEnv: launchContext?.env,
+        launchStrategy: launchContext?.launchStrategy,
         extensionCommandsParser: this.extensionCommandsParser,
         waitForInitialCommands: this.waitForInitialCommands,
         initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
@@ -1013,6 +1022,7 @@ export class ACPAgentClient implements AgentClient {
       handle,
       agentId: launchContext?.agentId,
       launchEnv: launchContext?.env,
+      launchStrategy: launchContext?.launchStrategy,
       extensionCommandsParser: this.extensionCommandsParser,
       waitForInitialCommands: this.waitForInitialCommands,
       initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
@@ -1065,6 +1075,8 @@ export class ACPAgentClient implements AgentClient {
               probe = spawned;
               if (context?.signal.aborted) void closeProbe().catch(() => undefined);
             },
+            // A global catalogue is the host's; only a workspace has a container.
+            launchStrategy: options.scope === "workspace" ? options.launchStrategy : undefined,
           }),
         ),
       );
@@ -1153,6 +1165,7 @@ export class ACPAgentClient implements AgentClient {
     const history = new ACPImportHistoryCollector();
     const probe = await this.spawnProcess(PROBE_ENV, {
       client: this.buildProbeClient((params) => history.accept(params)),
+      launchStrategy: options?.launchStrategy,
     });
     try {
       if (!probe.initialize.agentCapabilities?.sessionCapabilities?.list) {
@@ -1293,9 +1306,9 @@ export class ACPAgentClient implements AgentClient {
     });
   }
 
-  async isAvailable(): Promise<boolean> {
+  async isAvailable(options?: ProviderAvailabilityOptions): Promise<boolean> {
     try {
-      await this.resolveLaunchCommand();
+      await this.resolveLaunchCommand(options);
       return true;
     } catch {
       return false;
@@ -1308,9 +1321,14 @@ export class ACPAgentClient implements AgentClient {
       initializeTimeoutMs?: number;
       onSpawned?: (probe: UninitializedACPProcess) => void;
       client?: ACPClient;
+      launchStrategy?: ProcessLaunchStrategy;
     },
   ): Promise<SpawnedACPProcess> {
-    const transport = await this.spawnTransport(launchEnv, options?.client);
+    const transport = await this.spawnTransport(
+      launchEnv,
+      options?.client,
+      options?.launchStrategy,
+    );
     const probe: UninitializedACPProcess = {
       child: transport.child,
       connection: transport.connection,
@@ -1334,14 +1352,16 @@ export class ACPAgentClient implements AgentClient {
   protected async spawnTransport(
     launchEnv?: Record<string, string>,
     client: ACPClient = this.buildProbeClient(),
+    launchStrategy?: ProcessLaunchStrategy,
   ): Promise<ACPProcessTransport> {
-    const { command, args } = await this.resolveLaunchCommand();
-    const child = spawnProcess(command, args, {
+    const { command, args } = await this.resolveLaunchCommand({ launchStrategy });
+    const envSpec = createProviderEnvSpec({
+      runtimeSettings: this.runtimeSettings,
+      overlays: [launchEnv],
+    });
+    const child = (launchStrategy ?? LOCAL_LAUNCH_STRATEGY).spawn(command, args, {
       cwd: process.cwd(),
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: [launchEnv],
-      }),
+      ...envSpec,
       stdio: ["pipe", "pipe", "pipe"],
     });
     assertChildWithPipes(child);
@@ -1585,11 +1605,21 @@ export class ACPAgentClient implements AgentClient {
     }
   }
 
-  protected async resolveLaunchCommand(): Promise<{ command: string; args: string[] }> {
+  protected async resolveLaunchCommand(options?: {
+    launchStrategy?: ProcessLaunchStrategy;
+  }): Promise<{ command: string; args: string[] }> {
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],
     });
+    const strategy = options?.launchStrategy;
+    if (strategy?.isIsolated) {
+      // Whether the host has this tool says nothing about the container.
+      return {
+        command: await strategy.resolveExecutable(prefix.command),
+        args: [...prefix.args, ...this.defaultCommand.slice(1)],
+      };
+    }
     const availability = await checkProviderLaunchAvailable(prefix);
     if (!availability.available) {
       throw new Error(`${this.provider} command '${this.defaultCommand[0]}' not found`);
@@ -1653,6 +1683,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   ) => Promise<void>;
   private readonly agentId?: string;
   private readonly launchEnv?: Record<string, string>;
+  private readonly launchStrategy?: ProcessLaunchStrategy;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private pendingUserMessage: PendingUserMessage | null = null;
@@ -1712,6 +1743,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.availableModes = options.defaultModes;
     this.agentId = options.agentId;
     this.launchEnv = options.launchEnv;
+    this.launchStrategy = options.launchStrategy;
     this.initialHandle = options.handle;
     this.config = { ...config, provider: options.provider };
     this.currentMode = config.modeId ?? null;
@@ -2617,15 +2649,21 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     const terminalCommand = resolveTerminalCommand(params.command, params.args);
     const commandEnvOverlays =
       terminalCommand.shell === false ? [env, createStringCommandShellEnvOverlay()] : [env];
-    const child = spawnProcess(terminalCommand.command, terminalCommand.args, {
-      cwd: params.cwd ?? this.config.cwd,
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: commandEnvOverlays,
-      }),
-      shell: terminalCommand.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // The agent asks for these commands to run in its own workspace, so they
+    // belong wherever the agent itself is running.
+    const child = (this.launchStrategy ?? LOCAL_LAUNCH_STRATEGY).spawn(
+      terminalCommand.command,
+      terminalCommand.args,
+      {
+        cwd: params.cwd ?? this.config.cwd,
+        ...createProviderEnvSpec({
+          runtimeSettings: this.runtimeSettings,
+          overlays: commandEnvOverlays,
+        }),
+        shell: terminalCommand.shell,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
 
     let resolveExit!: (exit: TerminalExit) => void;
     let rejectExit!: (error: Error) => void;
@@ -2703,19 +2741,26 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],
     });
-    const availability = await checkProviderLaunchAvailable(prefix);
-    if (!availability.available) {
-      throw new Error(`${this.provider} command '${this.defaultCommand[0]}' not found`);
+    // Isolated launches resolve on the container's PATH — see
+    // ACPAgentClient.resolveLaunchCommand.
+    if (!this.launchStrategy?.isIsolated) {
+      const availability = await checkProviderLaunchAvailable(prefix);
+      if (!availability.available) {
+        throw new Error(`${this.provider} command '${this.defaultCommand[0]}' not found`);
+      }
     }
 
-    const command = prefix.command;
+    const command = this.launchStrategy?.isIsolated
+      ? await this.launchStrategy.resolveExecutable(prefix.command)
+      : prefix.command;
     const args = [...prefix.args, ...this.defaultCommand.slice(1)];
-    const child = spawnProcess(command, args, {
+    const envSpec = createProviderEnvSpec({
+      runtimeSettings: this.runtimeSettings,
+      overlays: [this.launchEnv],
+    });
+    const child = (this.launchStrategy ?? LOCAL_LAUNCH_STRATEGY).spawn(command, args, {
       cwd: this.config.cwd,
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: [this.launchEnv],
-      }),
+      ...envSpec,
       stdio: ["pipe", "pipe", "pipe"],
     });
     assertChildWithPipes(child);
