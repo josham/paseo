@@ -5613,19 +5613,31 @@ export class Session {
   /**
    * Whether a new worktree should be linked by relative path.
    *
-   * Only a relative link works from inside a container, so this follows the
-   * container backend being chosen at all. The version gate is the host's git
-   * alone, because the choice is not per-container: linking one worktree
-   * relatively marks the whole *repository* with `extensions.relativeWorktrees`,
-   * and every workspace sharing that repository — other worktrees, the main
-   * checkout, whichever containers they run in — lives with the result. An
-   * image whose git is older than 2.48 will refuse that repository, which is
-   * the same answer it would give for a worktree it could not resolve anyway.
+   * Two questions, in this order. Does the worktree need relative links at all?
+   * Only inside a container, and only one that mounts the workspace somewhere
+   * other than its host path — a container that keeps the path resolves the
+   * ordinary absolute links unchanged, so it is asked first and answers for
+   * most compose setups.
+   *
+   * Can git read them? The host's git alone decides, because the choice is not
+   * per-container: linking one worktree relatively marks the whole *repository*
+   * with `extensions.relativeWorktrees`, and every workspace sharing it — other
+   * worktrees, the main checkout, whichever containers they run in — lives with
+   * the result. An image whose git is older than 2.48 will refuse that
+   * repository, which is the same answer it would give for a worktree it could
+   * not resolve anyway.
+   *
+   * The path question comes first for the same reason: an extension that buys
+   * this workspace nothing must not be the thing that locks an older git out of
+   * the repository.
    */
   private async shouldLinkWorktreeRelatively(input: {
     containerBackend: string | null;
+    cwd: string;
   }): Promise<boolean> {
     if (!input.containerBackend) return false;
+    const backend = this.containerBackends?.get(input.containerBackend) ?? null;
+    if (await backend?.preservesHostWorkspacePath(input.cwd)) return false;
     return hostGitSupportsRelativeWorktrees();
   }
 
@@ -6791,6 +6803,7 @@ export class Session {
         containerBackend: request.containerBackend ?? null,
         relativePaths: await this.shouldLinkWorktreeRelatively({
           containerBackend: request.containerBackend ?? null,
+          cwd: sourceCwd,
         }),
       },
       source.baseBranch
