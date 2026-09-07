@@ -1279,6 +1279,12 @@ export const ptBR: TranslationResources = {
         archiveFailed: "Falha ao arquivar workspace",
       },
     },
+    tree: {
+      expandWorkspace: "Expandir árvore do workspace",
+      collapseWorkspace: "Recolher árvore do workspace",
+      expandAgent: "Expandir {{label}}",
+      collapseAgent: "Recolher {{label}}",
+    },
   },
   newWorkspace: {
     title: "Novo workspace",

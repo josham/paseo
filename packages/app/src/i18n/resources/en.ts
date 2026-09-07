@@ -1261,6 +1261,12 @@ export const en = {
         archiveFailed: "Failed to archive workspace",
       },
     },
+    tree: {
+      expandWorkspace: "Expand workspace tree",
+      collapseWorkspace: "Collapse workspace tree",
+      expandAgent: "Expand {{label}}",
+      collapseAgent: "Collapse {{label}}",
+    },
   },
   newWorkspace: {
     title: "New workspace",
