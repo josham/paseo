@@ -97,10 +97,16 @@ SETTINGS
   echo "seeded \$EDGE_SETTINGS (attaches to the running daemon, never manages one)"
 fi
 
+# --no-sandbox goes on argv, matching electron-builder's own generated entry
+# (Exec=AppRun --no-sandbox %U). main.ts appends the switch at runtime when \$APPIMAGE
+# is set, but by then Chromium has already decided to sandbox the renderer: it comes up
+# with --enable-sandbox and --no-sandbox together, tries the SUID helper from the /tmp
+# AppImage mount, and SIGTRAPs. Passed here, the zygotes get --no-zygote-sandbox and
+# the renderer starts.
 exec env \\
   PASEO_ELECTRON_USER_DATA_DIR="\$PROFILE" \\
   PASEO_TEST_APP_NAME="Paseo Edge" \\
-  "\$APPIMAGE" "\$@"
+  "\$APPIMAGE" --no-sandbox "\$@"
 LAUNCHER
 chmod +x "$launcher"
 
