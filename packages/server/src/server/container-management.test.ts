@@ -81,6 +81,7 @@ function createMockContainerBackend(
     isAvailable?: () => Promise<boolean>;
     isAlreadyRunning?: (ref: ContainerRef) => Promise<boolean>;
     configHash?: string | null;
+    preservesHostWorkspacePath?: (workspaceFolder: string) => Promise<boolean>;
   } = {},
 ): ContainerBackend {
   const handles = new Map<string, ExecutionHandle>();
@@ -127,6 +128,8 @@ function createMockContainerBackend(
     getConfigHash(_cwd: string) {
       return options.configHash ?? "hash-123";
     },
+    preservesHostWorkspacePath:
+      options.preservesHostWorkspacePath ?? (async (_workspaceFolder: string) => false),
     isAlreadyRunning: options.isAlreadyRunning ?? (async (_ref: ContainerRef) => false),
     async removeAbandonedProbeContainers() {
       return 0;
@@ -793,6 +796,43 @@ test("container.probe.request reports a failure instead of pretending it succeed
   expect(response.payload.error).toContain("container exploded");
   expect(response.payload.entries).toEqual([]);
 });
+
+/**
+ * Real CLI, no docker: `read-configuration` reads and substitutes files and
+ * starts nothing, so this runs everywhere the package is installed. It is the
+ * part worth testing for real — the answer depends on how the CLI resolves a
+ * config, which a fixture would only assert we had guessed right.
+ */
+test("the backend reads whether a container keeps the workspace at its host path", async () => {
+  const backend = createDevContainerBackend({ logger: createTestLogger() });
+  const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-paths-"));
+  const config = path.join(cwd, ".devcontainer.json");
+  const write = (json: string) => writeFileSync(config, json);
+
+  // The default: the files land under /workspaces, so a worktree there needs
+  // relative links.
+  write('{"image":"alpine:latest"}');
+  expect(await backend.preservesHostWorkspacePath(cwd)).toBe(false);
+
+  // Asking for the host path as the working directory is not enough — the
+  // mount still defaults to /workspaces/<name>.
+  write('{"image":"alpine:latest","workspaceFolder":"${localWorkspaceFolder}"}');
+  expect(await backend.preservesHostWorkspacePath(cwd)).toBe(false);
+
+  // Mounted at the host path as well: absolute worktree links resolve inside
+  // the container, and the repository never gets the extension.
+  write(
+    '{"image":"alpine:latest","workspaceFolder":"${localWorkspaceFolder}",' +
+      '"workspaceMount":"source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind"}',
+  );
+  expect(await backend.preservesHostWorkspacePath(cwd)).toBe(true);
+
+  // No config at all: nothing to read, and no container either.
+  rmSync(config);
+  expect(await backend.preservesHostWorkspacePath(cwd)).toBe(false);
+
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);
 
 // ---------------------------------------------------------------------------
 // Real devcontainer + docker integration tests

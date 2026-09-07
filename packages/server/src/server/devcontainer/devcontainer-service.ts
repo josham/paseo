@@ -10,6 +10,7 @@ import {
   isCommandAvailable,
 } from "../../executable-resolution/executable-resolution.js";
 import { discoverDevContainerConfig } from "./config-discovery.js";
+import { readConfigurationKeepsHostPath } from "./relative-worktrees.js";
 import type {
   ContainerBackend,
   ContainerInfo,
@@ -57,6 +58,14 @@ const AVAILABILITY_CACHE_MS = 60_000;
 
 /** Ceiling for a single `devcontainer up`; a first build pulls and provisions. */
 const CLI_TIMEOUT_MS = 300_000;
+
+/**
+ * Ceiling for `devcontainer read-configuration`, which reads and substitutes
+ * files and starts nothing. It runs in the middle of creating a worktree, so a
+ * CLI that hangs has to give up quickly and let the worktree be made the safe
+ * way instead.
+ */
+const READ_CONFIGURATION_TIMEOUT_MS = 15_000;
 
 interface DevContainerBackendDeps {
   logger: Logger;
@@ -452,6 +461,42 @@ export function createDevContainerBackend(
     return runUp(options, true);
   }
 
+  /**
+   * `read-configuration` resolves the config the way `up` will and reports the
+   * folder and mount the container ends up with. Both naming this host folder
+   * mean the workspace's absolute worktree links resolve in the container as
+   * they are.
+   *
+   * Read from the source checkout, since the worktree being decided for does
+   * not exist yet. That answers for it too where the config says
+   * `${localWorkspaceFolder}` — the case this exists for, and the only way a
+   * compose project can mount two workspaces of one repository at their own
+   * paths. A config naming one absolute path answers no, which is also right:
+   * that path is the source checkout's, not the worktree's.
+   */
+  async function preservesHostWorkspacePath(workspaceFolder: string): Promise<boolean> {
+    const folder = resolve(workspaceFolder);
+    if (!discoverDevContainerConfig(folder)) return false;
+    try {
+      const result = await execCommand(
+        devcontainerBin,
+        ["read-configuration", "--workspace-folder", folder],
+        { timeout: READ_CONFIGURATION_TIMEOUT_MS },
+      );
+      const keepsHostPath = readConfigurationKeepsHostPath(result.stdout, folder);
+      logger.debug({ workspaceFolder: folder, keepsHostPath }, "Read container workspace folder");
+      return keepsHostPath;
+    } catch (error) {
+      // Only ever loses the optimisation: the caller falls back to relative
+      // links, which work whichever path the container mounts.
+      logger.debug(
+        { workspaceFolder: folder, error },
+        "Could not read the container workspace folder",
+      );
+      return false;
+    }
+  }
+
   function getConfigHash(workspaceFolder: string): string | null {
     const config = discoverDevContainerConfig(workspaceFolder);
     if (!config) return null;
@@ -507,6 +552,7 @@ export function createDevContainerBackend(
     restart,
     rebuild,
     getConfigHash,
+    preservesHostWorkspacePath,
     isAlreadyRunning,
     removeAbandonedProbeContainers,
     createStrategy,

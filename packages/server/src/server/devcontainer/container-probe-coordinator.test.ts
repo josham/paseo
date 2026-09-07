@@ -52,6 +52,7 @@ function createFakeBackend(
     restart: async () => HANDLE,
     rebuild: async () => HANDLE,
     getConfigHash: () => "hash",
+    preservesHostWorkspacePath: async () => false,
     isAlreadyRunning: async () => false,
     removeAbandonedProbeContainers: async () => 0,
     createStrategy: () => new LocalLaunchStrategy(),
