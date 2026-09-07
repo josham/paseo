@@ -13,4 +13,4 @@
 feat/configurable-content-width
 fix/numeric-settings-clamp-resync
 fix/app-update-preserves-external-daemon
-fix/appimage-relaunch-with-no-sandbox
+pr/3723-appimage-launcher
