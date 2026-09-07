@@ -67,7 +67,20 @@ jobs:
             echo
             echo "Based on upstream \`getpaseo/paseo@$base\`, plus:"
             echo
-            git log --first-parent --format='%s' HEAD | grep '^edge: merge ' | sed 's/^edge: merge /- /'
+            # branches.txt is the manifest, so its trailing `# ...` comment is the one
+            # description of each branch. Reading it here keeps the notes from drifting.
+            git log --first-parent --format='%s' HEAD |
+              grep '^edge: merge ' |
+              sed 's/^edge: merge //' |
+              while read -r branch; do
+                # Split on the first # only: descriptions carry their own (PR #1234).
+                desc="$(awk -v b="$branch" '
+                  { i = index($0, "#")
+                    key = (i ? substr($0, 1, i - 1) : $0); gsub(/[ \t]/, "", key)
+                    if (key == b && i) { d = substr($0, i + 1); sub(/^[ \t]*/, "", d); print d; exit } }
+                ' scripts/edge/branches.txt)"
+                if [ -n "$desc" ]; then echo "- $desc — \`$branch\`"; else echo "- \`$branch\`"; fi
+              done
             echo
             echo "Installs alongside a stock Paseo (separate app id and desktop entry). The AppImage"
             echo "self-updates from this repo's releases."

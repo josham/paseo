@@ -9,6 +9,29 @@ modified, and the app's identity and update feed are set with `electron-builder 
 flags at build time. That is deliberate: a fork that edits upstream files pays for it on
 every rebase, forever.
 
+## What's in a build
+
+Every branch a build carries is listed in [`scripts/edge/branches.txt`](../scripts/edge/branches.txt),
+one per line, each with a trailing `#` comment saying what it is:
+
+```
+pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstream PR #2453, bendavid)
+```
+
+That file is the manifest `rebuild.sh` merges from, so it cannot drift from what shipped.
+`rebuild.sh` strips the comments when it parses; the release workflow reads them back to
+write the "plus:" list in each release's notes. Adding a branch means adding its line and
+its one-line description — nothing else to update.
+
+For a specific build, the [release notes](https://github.com/josham/paseo/releases) name
+the upstream commit it is based on and list every branch on top of it.
+
+To see what a build actually contains rather than what was intended:
+
+```bash
+git log --first-parent --format=%s edge-v1.1.0 | grep '^edge: merge '
+```
+
 ## Branches
 
 | Branch                    | What it is                                                                                                             |
@@ -34,8 +57,15 @@ git checkout -b bd/my-change upstream/main    # always cut from upstream/main
 git push -u origin bd/my-change
 ```
 
-Then add `bd/my-change` to `scripts/edge/branches.txt` on `edge/tooling`, push that, and
-rebuild:
+Then add `bd/my-change` to `scripts/edge/branches.txt` on `edge/tooling`, with a trailing
+`#` comment describing it — that comment is what the release notes show, so write it for
+someone reading the releases page:
+
+```
+bd/my-change  # What it does (upstream PR #1234)
+```
+
+Push that, and rebuild:
 
 ```bash
 scripts/edge/rebuild.sh            # --dry-run to build it locally without pushing

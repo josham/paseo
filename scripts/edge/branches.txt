@@ -10,8 +10,8 @@
 #
 # edge/tooling is always merged first and does not belong in this list.
 
-feat/configurable-content-width
-fix/numeric-settings-clamp-resync
-fix/app-update-preserves-external-daemon
-pr/3723-appimage-launcher
-pr/2453-devcontainer
+feat/configurable-content-width  # Content width as an Appearance setting (upstream PR #3652)
+fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (upstream PR #3655)
+fix/app-update-preserves-external-daemon  # App updates leave an externally managed daemon running (upstream PR #4429)
+pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (upstream PR #3723, mvanhorn)
+pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstream PR #2453, bendavid)
