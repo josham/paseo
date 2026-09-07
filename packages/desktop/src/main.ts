@@ -28,6 +28,11 @@ import {
 } from "electron";
 import { registerDaemonManager } from "./daemon/daemon-manager.js";
 import { parsePassthroughCliArgsFromArgv, runPassthroughCli } from "./daemon/cli/passthrough.js";
+import {
+  APPIMAGE_SANDBOX_RELAUNCH_ENV,
+  relaunchAppImageWithoutSandbox,
+  shouldRelaunchAppImageWithoutSandbox,
+} from "./system/appimage-sandbox.js";
 import { closeAllTransportSessions } from "./daemon/local-transport.js";
 import {
   applyDesktopWindowChromeMode,
@@ -333,8 +338,26 @@ if (forcedUserDataDir) {
 // AppImage runtimes mount the app from /tmp under the user's UID, so the SUID
 // chrome-sandbox helper we ship in .deb/.rpm cannot work there. Disable the
 // sandbox only in that case; .deb/.rpm keep the sandbox on, matching VS Code.
-if (process.platform === "linux" && process.env.APPIMAGE) {
-  app.commandLine.appendSwitch("no-sandbox");
+//
+// appendSwitch cannot do this: Chromium has already configured the sandbox by the time
+// this runs. The flag has to be on argv, and no launcher can guarantee that, so re-exec
+// ourselves once with it. See ./system/appimage-sandbox.ts.
+if (
+  shouldRelaunchAppImageWithoutSandbox({
+    platform: process.platform,
+    appImagePath: process.env.APPIMAGE,
+    argv: process.argv,
+    isPassthroughCli: parsePassthroughCliArgsFromArgv(process.argv) !== null,
+    alreadyRelaunched: process.env[APPIMAGE_SANDBOX_RELAUNCH_ENV] === "1",
+  })
+) {
+  log.info("[appimage-sandbox] re-executing with --no-sandbox on argv");
+  relaunchAppImageWithoutSandbox({
+    appImagePath: process.env.APPIMAGE as string,
+    argv: process.argv,
+    env: process.env,
+  });
+  app.exit(0);
 }
 
 // Allow users to pass Chromium flags via PASEO_ELECTRON_FLAGS for debugging
