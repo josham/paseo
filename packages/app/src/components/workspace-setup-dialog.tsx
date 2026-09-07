@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { useContainerBackendAvailability } from "@/hooks/use-container-backend-availability";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { Composer } from "@/composer";
@@ -37,6 +38,8 @@ import { projectIconPlaceholderLabelFromDisplayName } from "@/utils/project-disp
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import type { MessagePayload } from "@/composer/types";
+import { ContainerBackendSelector } from "@/components/container-backend-selector";
+import { ContainerConfigChangedBanner } from "@/components/container-config-changed-banner";
 
 function toProjectIconDataUri(icon: { mimeType: string; data: string } | null): string | null {
   if (!icon) {
@@ -94,7 +97,11 @@ async function callWorkspaceCreation({
   connectedClient: DaemonClient;
   creationId: string;
   worktreeSlug: string;
-  input: { cwd: string; agent?: CreateWorkspaceRequestOptions["agent"] };
+  input: {
+    cwd: string;
+    agent?: CreateWorkspaceRequestOptions["agent"];
+    containerBackend: string | null;
+  };
 }) {
   return connectedClient.createWorkspace({
     idempotencyKey: creationId,
@@ -103,6 +110,7 @@ async function callWorkspaceCreation({
       creationMethod === "create_worktree"
         ? { kind: "worktree", cwd: input.cwd, worktreeSlug }
         : { kind: "directory", path: input.cwd },
+    containerBackend: input.containerBackend,
   });
 }
 
@@ -161,6 +169,7 @@ function buildCreateAgentOptions({
   };
 }
 
+// oxlint-disable-next-line eslint(complexity): dialog has many UI states
 export function WorkspaceSetupDialog() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -188,6 +197,8 @@ export function WorkspaceSetupDialog() {
   const workspace = createdWorkspace;
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
+  const { containerBackend, setContainerBackend, containerAvailability } =
+    useContainerBackendAvailability(client, sourceDirectory);
   const chatDraft = useAgentInputDraft({
     draftKey: `workspace-setup:${serverId}:${sourceDirectory}`,
     composer: buildChatDraftComposerArgs({
@@ -273,7 +284,7 @@ export function WorkspaceSetupDialog() {
         creationId: pendingWorkspaceSetup.creationId,
         worktreeSlug: pendingWorkspaceSetup.worktreeSlug,
         connectedClient,
-        input,
+        input: { cwd: input.cwd, containerBackend },
       });
 
       if (payload.error || !payload.workspace) {
@@ -292,6 +303,7 @@ export function WorkspaceSetupDialog() {
       return normalizedWorkspace;
     },
     [
+      containerBackend,
       createdWorkspace,
       mergeWorkspaces,
       pendingWorkspaceSetup,
@@ -468,7 +480,16 @@ export function WorkspaceSetupDialog() {
           />
         </KeyboardTranslateView>
       </FileDropZone>
-
+      {createdWorkspace ? (
+        <ContainerConfigChangedBanner serverId={serverId} workspaceId={createdWorkspace.id} />
+      ) : null}
+      {containerAvailability ? (
+        <ContainerBackendSelector
+          value={containerBackend}
+          backends={containerAvailability.backends}
+          onChange={setContainerBackend}
+        />
+      ) : null}
       {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
     </AdaptiveModalSheet>
   );

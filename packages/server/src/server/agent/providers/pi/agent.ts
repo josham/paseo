@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, posix, resolve as resolvePath } from "node:path";
 import type { Logger } from "pino";
 import stripAnsi from "strip-ansi";
 import { z } from "zod";
@@ -37,6 +37,7 @@ import {
   type ImportProviderSessionContext,
   type ImportProviderSessionInput,
   type ListImportableSessionsOptions,
+  type ProviderAvailabilityOptions,
   type ProviderCatalog,
   type ProviderRefreshContext,
 } from "../../agent-sdk-types.js";
@@ -64,6 +65,11 @@ import {
   type PiCapturedUserMessageEntry,
 } from "./history-mapper.js";
 import { materializeProviderImage } from "../provider-image-output.js";
+import {
+  createLaunchFileSystem,
+  type LaunchFileSystem,
+} from "../../../devcontainer/launch-filesystem.js";
+import type { ProcessLaunchStrategy } from "../../../devcontainer/launch-strategy.js";
 import { PiCliRuntime } from "./cli-runtime.js";
 import {
   createPiExtensionHost,
@@ -165,6 +171,7 @@ const PI_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: true,
   supportsRewindFiles: false,
   supportsRewindBoth: false,
+  supportsIsolatedLaunch: true,
 };
 
 const PI_THINKING_OPTIONS: ReadonlyArray<{
@@ -239,7 +246,7 @@ interface PiRpcAgentSessionOptions {
   initialState: PiSessionState;
   capabilities: AgentCapabilityFlags;
   currentModeId?: string | null;
-  cleanup?: () => void;
+  cleanup?: () => Promise<void>;
   extensionTimeoutMs?: number;
   logger: Logger;
   usagePollScheduler?: PiUsagePollScheduler;
@@ -274,7 +281,7 @@ interface PiPaseoExtensionOptions {
 
 interface PiTempFile {
   path: string;
-  cleanup: () => void;
+  cleanup: () => Promise<void>;
 }
 
 interface PiCapturedEntry extends PiCapturedUserMessageEntry {
@@ -499,6 +506,7 @@ function buildResumeStartInput(input: {
     thinkingOptionId: normalizePiThinkingOption(input.resumeConfig.thinkingOptionId) ?? undefined,
     mcpConfigPath: input.mcpConfigFile?.path,
     extensionPaths: input.paseoExtension ? [input.paseoExtension.path] : undefined,
+    launchStrategy: input.launchContext?.launchStrategy,
   };
 }
 
@@ -544,29 +552,47 @@ function toPiBuiltinMcpServers(
   return piServers;
 }
 
-function resolvePiAgentDir(env: Record<string, string> | undefined): string {
-  const configured = env?.PI_CODING_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
+/**
+ * Where Pi keeps its own configuration. `env` is what Paseo hands the agent,
+ * so it applies wherever Pi runs — but the daemon's own PI_CODING_AGENT_DIR
+ * and HOME describe the host, and a container has neither.
+ */
+async function resolvePiAgentDir(
+  files: LaunchFileSystem,
+  env: Record<string, string> | undefined,
+): Promise<string> {
+  const configured = files.isIsolated
+    ? env?.PI_CODING_AGENT_DIR?.trim()
+    : env?.PI_CODING_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
+  const home = files.isIsolated ? await files.homeDir() : homedir();
   if (!configured) {
-    return join(homedir(), ".pi", "agent");
+    return joinLaunchPath(files, home, ".pi", "agent");
   }
   if (configured === "~") {
-    return homedir();
+    return home;
   }
   if (configured.startsWith("~/")) {
-    return resolvePath(homedir(), configured.slice(2));
+    return joinLaunchPath(files, home, configured.slice(2));
   }
-  return resolvePath(configured);
+  return files.isIsolated ? configured : resolvePath(configured);
 }
 
-function readPiGlobalMcpConfig(env: Record<string, string> | undefined): Record<string, unknown> {
-  const globalConfigPath = join(resolvePiAgentDir(env), "mcp.json");
-  if (!existsSync(globalConfigPath)) {
+async function readPiGlobalMcpConfig(
+  files: LaunchFileSystem,
+  env: Record<string, string> | undefined,
+): Promise<Record<string, unknown>> {
+  // Pi merges its own global servers with the ones Paseo passes, and the ones
+  // that matter are the ones visible to the Pi that will run.
+  const agentDir = await resolvePiAgentDir(files, env);
+  const globalConfigPath = joinLaunchPath(files, agentDir, "mcp.json");
+  const contents = await files.readFile(globalConfigPath);
+  if (contents === null) {
     return {};
   }
 
   let globalConfig: unknown;
   try {
-    globalConfig = JSON.parse(readFileSync(globalConfigPath, "utf8")) as unknown;
+    globalConfig = JSON.parse(contents) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(`Failed to parse Pi MCP config: ${globalConfigPath}`, { cause: error });
@@ -579,14 +605,15 @@ function readPiGlobalMcpConfig(env: Record<string, string> | undefined): Record<
   return globalConfig;
 }
 
-function createPiMcpConfigFile(
+async function createPiMcpConfigFile(
+  files: LaunchFileSystem,
   servers: Record<string, McpServerConfig>,
   options?: {
     piGlobalConfigEnv?: Record<string, string>;
   },
-): PiTempFile {
+): Promise<PiTempFile> {
   const globalConfig = options?.piGlobalConfigEnv
-    ? readPiGlobalMcpConfig(options.piGlobalConfigEnv)
+    ? await readPiGlobalMcpConfig(files, options.piGlobalConfigEnv)
     : {};
   let configuredServers: Record<string, unknown> = {};
   if (isRecord(globalConfig.mcpServers)) {
@@ -599,27 +626,25 @@ function createPiMcpConfigFile(
     mcpServers[name] = toPiMcpAdapterConfig(serverConfig);
   }
 
-  const dir = mkdtempSync(join(tmpdir(), "paseo-pi-mcp-"));
-  const filePath = join(dir, "mcp.json");
+  const dir = await files.makeTempDir("paseo-pi-mcp-");
+  const filePath = joinLaunchPath(files, dir, "mcp.json");
   const mergedConfig: Record<string, unknown> = { ...globalConfig, mcpServers };
   delete mergedConfig["mcp-servers"];
-  writeFileSync(filePath, `${JSON.stringify(mergedConfig, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  // The config names the daemon's MCP endpoint and its auth token.
+  await files.writeFile(filePath, `${JSON.stringify(mergedConfig, null, 2)}\n`, { mode: 0o600 });
   return {
     path: filePath,
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => removeLaunchPath(files, dir),
   };
 }
 
-function createPiPaseoExtensionFile({
-  systemPrompt,
-  mcpServers = {},
-}: PiPaseoExtensionOptions): PiTempFile {
-  const dir = mkdtempSync(join(tmpdir(), "paseo-pi-extension-"));
-  const filePath = join(dir, "paseo-integration.mjs");
-  writeFileSync(
+async function createPiPaseoExtensionFile(
+  files: LaunchFileSystem,
+  { systemPrompt, mcpServers = {} }: PiPaseoExtensionOptions,
+): Promise<PiTempFile> {
+  const dir = await files.makeTempDir("paseo-pi-extension-");
+  const filePath = joinLaunchPath(files, dir, "paseo-integration.mjs");
+  await files.writeFile(
     filePath,
     `
 	function decodePayload(encoded) {
@@ -761,22 +786,43 @@ function createPiPaseoExtensionFile({
 	}
 `.trimStart(),
     // MCP server headers and env can carry credentials.
-    { encoding: "utf8", mode: 0o600 },
+    { mode: 0o600 },
   );
   return {
     path: filePath,
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => removeLaunchPath(files, dir),
   };
 }
 
-function combineCleanup(cleanups: Array<(() => void) | undefined>): (() => void) | undefined {
-  const activeCleanups = cleanups.filter((cleanup): cleanup is () => void => Boolean(cleanup));
+/**
+ * Pi is configured through file paths it will open itself, so both the
+ * temporary directory and the paths handed to it belong to the environment Pi
+ * runs in — POSIX inside a container, whatever the daemon uses on the host.
+ */
+function joinLaunchPath(files: LaunchFileSystem, ...segments: string[]): string {
+  return files.isIsolated ? posix.join(...segments) : join(...segments);
+}
+
+/**
+ * Removal is best-effort — `remove` never rejects — but teardown awaits it, so
+ * a closed session leaves nothing behind on either filesystem.
+ */
+function removeLaunchPath(files: LaunchFileSystem, dir: string): Promise<void> {
+  return files.remove(dir);
+}
+
+function combineCleanup(
+  cleanups: Array<(() => Promise<void>) | undefined>,
+): (() => Promise<void>) | undefined {
+  const activeCleanups = cleanups.filter((cleanup): cleanup is () => Promise<void> =>
+    Boolean(cleanup),
+  );
   if (activeCleanups.length === 0) {
     return undefined;
   }
-  return () => {
+  return async () => {
     for (const cleanup of activeCleanups) {
-      cleanup();
+      await cleanup();
     }
   };
 }
@@ -1240,7 +1286,7 @@ export class PiRpcAgentSession implements AgentSession {
 
   private readonly runtimeSession: PiRuntimeSession;
   private readonly config: AgentSessionConfig;
-  private readonly cleanup?: () => void;
+  private readonly cleanup?: () => Promise<void>;
   private readonly extensionTimeoutMs: number;
 
   get id(): string | null {
@@ -1579,7 +1625,7 @@ export class PiRpcAgentSession implements AgentSession {
     } finally {
       await Promise.all(this.pendingExtensionHydrations);
       this.rejectAllExtensionResults(new Error("Pi session closed"));
-      this.cleanup?.();
+      await this.cleanup?.();
     }
   }
 
@@ -2480,16 +2526,27 @@ export class PiRpcAgentClient implements AgentClient {
   ): Promise<AgentSession> {
     const providerOptions = PiProviderOptionsSchema.parse(config.providerOptions ?? {});
     const runtime = this.resolveRuntime(providerOptions.rpcTimeoutMs);
+    const launchStrategy = launchContext?.launchStrategy;
+    // Pi opens these paths itself, so they have to exist where Pi runs.
+    const files = createLaunchFileSystem(launchStrategy);
     const mcpEnv = {
       ...this.runtimeSettings?.env,
       ...launchContext?.env,
     };
-    const mcp = await this.prepareMcpInjection(config.cwd, config.mcpServers, mcpEnv, runtime);
+    const mcp = await this.prepareMcpInjection({
+      cwd: config.cwd,
+      servers: config.mcpServers,
+      env: mcpEnv,
+      runtime,
+      files,
+      launchStrategy,
+    });
     const mcpConfigFile = mcp?.kind === "adapter" ? mcp.configFile : null;
-    const paseoExtension = createPiPaseoExtensionFile({
+    const paseoExtension = await createPiPaseoExtensionFile(files, {
       systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
       mcpServers: mcp?.kind === "builtin" ? mcp.servers : undefined,
     });
+    const cleanup = combineCleanup([mcpConfigFile?.cleanup, paseoExtension?.cleanup]);
     let runtimeSession: PiRuntimeSession;
     try {
       runtimeSession = await runtime.startSession({
@@ -2500,10 +2557,10 @@ export class PiRpcAgentClient implements AgentClient {
         env: launchContext?.env,
         mcpConfigPath: mcpConfigFile?.path,
         extensionPaths: paseoExtension ? [paseoExtension.path] : undefined,
+        launchStrategy,
       });
     } catch (error) {
-      mcpConfigFile?.cleanup();
-      paseoExtension?.cleanup();
+      await cleanup?.();
       throw error;
     }
     try {
@@ -2512,15 +2569,14 @@ export class PiRpcAgentClient implements AgentClient {
         config,
         initialState: await runtimeSession.getState(),
         capabilities: capabilitiesForSession(mcp !== null),
-        cleanup: combineCleanup([mcpConfigFile?.cleanup, paseoExtension?.cleanup]),
+        cleanup,
         extensionTimeoutMs: providerOptions.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
-      mcpConfigFile?.cleanup();
-      paseoExtension?.cleanup();
+      await cleanup?.();
       throw error;
     }
   }
@@ -2542,24 +2598,29 @@ export class PiRpcAgentClient implements AgentClient {
       resumeConfig.config.providerOptions ?? {},
     );
     const runtime = this.resolveRuntime(providerOptions.rpcTimeoutMs);
+    const launchStrategy = launchContext?.launchStrategy;
+    const files = createLaunchFileSystem(launchStrategy);
     const mcpEnv = {
       ...this.runtimeSettings?.env,
       ...launchContext?.env,
     };
-    const mcp = await this.prepareMcpInjection(
-      resumeConfig.cwd,
-      resumeConfig.config.mcpServers,
-      mcpEnv,
+    const mcp = await this.prepareMcpInjection({
+      cwd: resumeConfig.cwd,
+      servers: resumeConfig.config.mcpServers,
+      env: mcpEnv,
       runtime,
-    );
+      files,
+      launchStrategy,
+    });
     const mcpConfigFile = mcp?.kind === "adapter" ? mcp.configFile : null;
-    const paseoExtension = createPiPaseoExtensionFile({
+    const paseoExtension = await createPiPaseoExtensionFile(files, {
       systemPrompt: composeSystemPromptParts(
         resumeConfig.config.systemPrompt,
         resumeConfig.config.daemonAppendSystemPrompt,
       ),
       mcpServers: mcp?.kind === "builtin" ? mcp.servers : undefined,
     });
+    const cleanup = combineCleanup([mcpConfigFile?.cleanup, paseoExtension?.cleanup]);
     let runtimeSession: PiRuntimeSession;
     try {
       runtimeSession = await runtime.startSession(
@@ -2572,8 +2633,7 @@ export class PiRpcAgentClient implements AgentClient {
         }),
       );
     } catch (error) {
-      mcpConfigFile?.cleanup();
-      paseoExtension?.cleanup();
+      await cleanup?.();
       throw error;
     }
     try {
@@ -2582,15 +2642,14 @@ export class PiRpcAgentClient implements AgentClient {
         config: resumeConfig.config,
         initialState: await runtimeSession.getState(),
         capabilities: capabilitiesForSession(mcp !== null),
-        cleanup: combineCleanup([mcpConfigFile?.cleanup, paseoExtension?.cleanup]),
+        cleanup,
         extensionTimeoutMs: providerOptions.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
-      mcpConfigFile?.cleanup();
-      paseoExtension?.cleanup();
+      await cleanup?.();
       throw error;
     }
   }
@@ -2614,6 +2673,8 @@ export class PiRpcAgentClient implements AgentClient {
       await runProviderRefreshActivity(context, "runtime.start", async () => {
         runtimeSession = await runtime.startSession({
           cwd: options.scope === "global" ? homedir() : options.cwd,
+          // A global catalog is the host's; only a workspace has a container.
+          launchStrategy: options.scope === "workspace" ? options.launchStrategy : undefined,
           signal: context?.signal,
         });
         if (context?.signal.aborted) await closeSession();
@@ -2660,7 +2721,10 @@ export class PiRpcAgentClient implements AgentClient {
   }
 
   async importSession(input: ImportProviderSessionInput, context: ImportProviderSessionContext) {
-    const importConfig = await readPiImportSessionConfig(input.providerHandleId);
+    const importConfig = await readPiImportSessionConfig(
+      input.providerHandleId,
+      context.launchContext?.launchStrategy,
+    );
     return importSessionFromPersistence({
       provider: this.provider,
       request: input,
@@ -2670,9 +2734,16 @@ export class PiRpcAgentClient implements AgentClient {
     });
   }
 
-  async isAvailable(): Promise<boolean> {
+  async isAvailable(options?: ProviderAvailabilityOptions): Promise<boolean> {
     try {
       const launch = await this.resolvePiLaunch();
+      const strategy = options?.launchStrategy;
+      if (strategy?.isIsolated) {
+        // The host's copy is irrelevant: this session would run in the
+        // container, where Pi has to be installed and on the PATH.
+        await strategy.resolveExecutable(launch.command);
+        return true;
+      }
       const availability = await checkProviderLaunchAvailable(launch);
       return availability.available;
     } catch {
@@ -2710,23 +2781,35 @@ export class PiRpcAgentClient implements AgentClient {
     return this.runtime ?? createRuntime(this.logger, this.runtimeSettings, rpcTimeoutMs);
   }
 
-  private async prepareMcpInjection(
-    cwd: string,
-    servers: Record<string, McpServerConfig> | undefined,
-    env: Record<string, string> | undefined,
-    runtime: PiRuntime,
-  ): Promise<PiMcpInjection | null> {
+  private async prepareMcpInjection(input: {
+    cwd: string;
+    servers: Record<string, McpServerConfig> | undefined;
+    env: Record<string, string> | undefined;
+    runtime: PiRuntime;
+    files: LaunchFileSystem;
+    launchStrategy?: ProcessLaunchStrategy;
+  }): Promise<PiMcpInjection | null> {
+    const { servers } = input;
     if (!servers || Object.keys(servers).length === 0) {
       return null;
     }
-    const mcpSupport = await this.detectMcpSupport(cwd, env, runtime);
+    // Which MCP support Pi has is a fact about the Pi that will run, so the
+    // probe goes to the same place the session will.
+    const mcpSupport = await this.detectMcpSupport(
+      input.cwd,
+      input.env,
+      input.runtime,
+      input.launchStrategy,
+    );
     if (mcpSupport === "builtin") {
       return { kind: "builtin", servers: toPiBuiltinMcpServers(servers) };
     }
     if (mcpSupport === "adapter") {
       return {
         kind: "adapter",
-        configFile: createPiMcpConfigFile(servers, { piGlobalConfigEnv: env }),
+        configFile: await createPiMcpConfigFile(input.files, servers, {
+          piGlobalConfigEnv: input.env,
+        }),
       };
     }
     return null;
@@ -2736,11 +2819,14 @@ export class PiRpcAgentClient implements AgentClient {
     cwd: string,
     env: Record<string, string> | undefined,
     runtime: PiRuntime,
+    launchStrategy?: ProcessLaunchStrategy,
   ): Promise<PiMcpInjection["kind"] | null> {
-    const runtimeSession = await runtime.startSession({ cwd, env }).catch((error) => {
-      this.logger.debug({ err: error, cwd }, "Pi MCP probe failed to start");
-      return null;
-    });
+    const runtimeSession = await runtime
+      .startSession({ cwd, env, launchStrategy })
+      .catch((error) => {
+        this.logger.debug({ err: error, cwd }, "Pi MCP probe failed to start");
+        return null;
+      });
     if (!runtimeSession) {
       return null;
     }
