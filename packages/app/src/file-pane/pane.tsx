@@ -8,6 +8,10 @@ import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
 import { FilePanelPreview, resolveFilePreviewPanel, type FilePanel } from "@/file-panels";
+import { PdfPreview } from "@/components/pdf-preview";
+import { hasPdfExtension, isPdfFile } from "@/pdf/pdf-mime";
+import type { PdfPreviewDocument } from "@/pdf/pdf-preview-props";
+import { usePdfDownload } from "@/pdf/use-pdf-download";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
@@ -67,6 +71,8 @@ interface FilePreviewBodyProps {
   workspaceRoot: string;
   client: DaemonClient | null;
   serverId: string;
+  pdfDocument: PdfPreviewDocument | null;
+  onDownloadPdf?: () => void;
 }
 
 type TextExplorerFile = ExplorerFile & { kind: "text" };
@@ -135,6 +141,8 @@ function FilePreviewBody({
   workspaceRoot,
   client,
   serverId,
+  pdfDocument,
+  onDownloadPdf,
 }: FilePreviewBodyProps) {
   const { t } = useTranslation();
   const filePath = location.path;
@@ -181,9 +189,30 @@ function FilePreviewBody({
     );
   }
 
+  if (isPdfFile(preview)) {
+    if (!pdfDocument) {
+      return (
+        <View style={styles.centerState}>
+          <ThemedLoadingSpinner size="small" uniProps={foregroundMutedColorMapping} />
+          <Text style={styles.loadingText}>{t("panels.file.loading")}</Text>
+        </View>
+      );
+    }
+
+    return (
+      <PdfPreview {...pdfDocument} onDownload={onDownloadPdf} testID="workspace-file-pdf-preview" />
+    );
+  }
+
   return (
     <View style={styles.centerState}>
-      <Text style={styles.emptyText}>{t("panels.file.binaryPreviewUnavailable")}</Text>
+      <Text style={styles.emptyText}>
+        {/* A .pdf that did not arrive as application/pdf came from a daemon
+            older than PDF preview support — the mime is the capability. */}
+        {hasPdfExtension(filePath)
+          ? t("panels.file.pdf.hostUpdateRequired")
+          : t("panels.file.binaryPreviewUnavailable")}
+      </Text>
       <Text style={styles.binaryMetaText}>{formatFileSize({ size: preview.size })}</Text>
     </View>
   );
@@ -249,8 +278,18 @@ export function FilePane({
 
   useEffect(() => setPreviewMode("preview"), [targetKey]);
 
-  const { file: preview, imageAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
+  const {
+    file: preview,
+    imageAttachment,
+    pdfDocument,
+  } = resolveFilePreviewLifecycle(previewLifecycle);
   const imagePreviewUri = useAttachmentPreviewUrl(imageAttachment);
+  const onDownloadPdf = usePdfDownload({
+    serverId,
+    workspaceRoot: normalizedWorkspaceRoot,
+    readTarget,
+    pdfDocument,
+  });
   const panel = resolveFilePreviewPanel({
     preview,
     path: location.path,
@@ -294,6 +333,8 @@ export function FilePane({
       location={location}
       navigationRevision={navigationRevision}
       imagePreviewUri={imagePreviewUri}
+      pdfDocument={pdfDocument}
+      onDownloadPdf={onDownloadPdf}
     />
   );
 }
@@ -333,6 +374,8 @@ function FilePanePresentation({
   location,
   navigationRevision,
   imagePreviewUri,
+  pdfDocument,
+  onDownloadPdf,
 }: {
   panel: FilePanel | null;
   serverId: string;
@@ -356,6 +399,8 @@ function FilePanePresentation({
   location: WorkspaceFileLocation;
   navigationRevision: number;
   imagePreviewUri: string | null;
+  pdfDocument: PdfPreviewDocument | null;
+  onDownloadPdf?: () => void;
 }) {
   if (!client && readTarget) {
     return (
@@ -434,6 +479,8 @@ function FilePanePresentation({
         workspaceRoot={workspaceRoot}
         client={client}
         serverId={serverId}
+        pdfDocument={pdfDocument}
+        onDownloadPdf={onDownloadPdf}
       />
     </View>
   );
@@ -588,6 +635,7 @@ function EditableFilePane({
           workspaceRoot={workspaceRoot}
           client={client}
           serverId={serverId}
+          pdfDocument={null}
         />
       )}
     </View>
