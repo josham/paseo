@@ -1822,6 +1822,13 @@ export const es: TranslationResources = {
       tooLargeToDisplay: "Este archivo es demasiado grande para mostrarlo",
       failedToLoad: "No se pudo cargar el archivo",
       failedToLoadPreview: "No se pudo cargar la vista previa del archivo",
+      pdf: {
+        title: "Vista previa del PDF",
+        loading: "Procesando el PDF...",
+        failed: "No se pudo procesar este PDF",
+        unsupportedPlatform: "La vista previa de PDF aún no está disponible en esta plataforma",
+        hostUpdateRequired: "Actualiza el host para ver PDF",
+      },
       editor: {
         fileSize: "Tamaño {{size}}",
         lines: "{{count}} líneas",

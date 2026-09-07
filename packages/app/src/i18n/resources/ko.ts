@@ -1786,6 +1786,13 @@ export const ko: TranslationResources = {
       tooLargeToDisplay: "이 파일은 너무 커서 표시할 수 없습니다",
       failedToLoad: "파일을 불러오지 못했습니다",
       failedToLoadPreview: "파일 미리보기를 불러오지 못했습니다",
+      pdf: {
+        title: "PDF 미리보기",
+        loading: "PDF를 렌더링하는 중...",
+        failed: "이 PDF를 렌더링할 수 없습니다",
+        unsupportedPlatform: "이 플랫폼에서는 아직 PDF 미리보기를 지원하지 않습니다",
+        hostUpdateRequired: "PDF를 미리보려면 호스트를 업데이트하세요",
+      },
       editor: {
         fileSize: "파일 크기 {{size}}",
         lines: "{{count}} 라인",
