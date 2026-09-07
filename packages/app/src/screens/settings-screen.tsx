@@ -93,6 +93,7 @@ import { useDesktopAppUpdater } from "@/desktop/updates/use-desktop-app-updater"
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
 import { openChangelog } from "@/changelog";
+import { resolveEdgeBuildVersion } from "@/utils/edge-build";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { settingsStyles } from "@/styles/settings";
 import { THINKING_TONE_NATIVE_PCM_BASE64 } from "@/utils/thinking-tone.native-pcm";
@@ -598,6 +599,11 @@ interface AboutSectionProps {
 
 function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSectionProps) {
   const { t } = useTranslation();
+  // Null in an upstream build, so this row is Edge-only. Its strings are English
+  // literals rather than i18n keys on purpose: resources.test.ts keeps all nine locale
+  // resources key-for-key in sync with English, so a key here would mean editing nine
+  // files that every upstream rebase then conflicts on, to label a row only this fork ships.
+  const edgeBuildVersion = resolveEdgeBuildVersion();
   return (
     <>
       <SettingsSection title={t("settings.about.title")}>
@@ -610,6 +616,15 @@ function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSection
             <Text style={styles.aboutValue}>{appVersionText}</Text>
           </View>
           <WhatsNewRow />
+          {edgeBuildVersion ? (
+            <View style={settingsStyles.row}>
+              <View style={settingsStyles.rowContent}>
+                <Text style={settingsStyles.rowTitle}>Edge build</Text>
+                <Text style={settingsStyles.rowHint}>github.com/josham/paseo releases</Text>
+              </View>
+              <Text style={styles.aboutValue}>{formatVersionWithPrefix(edgeBuildVersion)}</Text>
+            </View>
+          ) : null}
           {isDesktopApp ? <DesktopAppUpdateRow /> : null}
         </View>
       </SettingsSection>
