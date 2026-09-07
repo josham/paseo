@@ -1354,6 +1354,12 @@ export const fr: TranslationResources = {
         archiveFailed: "Impossible d’archiver l’espace de travail",
       },
     },
+    tree: {
+      expandWorkspace: "Développer l'arbre de l'espace de travail",
+      collapseWorkspace: "Réduire l'arbre de l'espace de travail",
+      expandAgent: "Développer {{label}}",
+      collapseAgent: "Réduire {{label}}",
+    },
   },
   newWorkspace: {
     title: "Nouvel espace de travail",
