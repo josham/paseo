@@ -17,4 +17,5 @@ edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, 
 pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (upstream PR #3723, mvanhorn)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (upstream PR #2597, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (upstream PR #2452, bendavid)
+pr/2396-ssh-lifecycle  # Install, launch and authenticate SSH remote hosts (upstream PR #2396, bendavid)
 pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstream PR #2453, bendavid)
