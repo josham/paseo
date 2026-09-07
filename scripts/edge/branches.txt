@@ -1,0 +1,14 @@
+# Branches merged into edge/main by scripts/edge/rebuild.sh, in the order listed.
+#
+# One branch name per line, resolved against `origin` (github.com/josham/paseo).
+# Blank lines and # comments are ignored.
+#
+# Delete a line once its PR lands upstream: the next rebuild drops the branch, and
+# the change arrives through upstream/main instead. rebuild.sh warns and skips if a
+# listed branch is already contained in upstream/main, so a stale line is loud rather
+# than silently re-applying work upstream may have since changed.
+#
+# edge/tooling is always merged first and does not belong in this list.
+
+feat/configurable-content-width
+fix/numeric-settings-clamp-resync
