@@ -114,14 +114,14 @@ jobs:
           # the shell leaves them alone. executableName stays "Paseo": after-pack.js and
           # e2e/packaged-app-smoke.js hardcode it, and the smoke test is worth keeping.
           #
-          # Targets are listed explicitly to drop the rpm upstream builds: rpmbuild
-          # rejects a package name containing a space, so "Paseo Edge" produces an
-          # invalid spec. The AppImage is the artifact that self-updates and the one
-          # we actually install; keeping the readable product name is worth more than
-          # an rpm, and the alternative was mangling it to "Paseo-Edge" everywhere.
-          npm run build:desktop -- --publish never --linux AppImage deb tar.gz --x64 \
+          # productName carries the space for display; deb/rpm take a separate
+          # packageName because rpmbuild rejects a Name tag containing one, which
+          # failed the first 1.0.0 build after AppImage/deb/tar.gz had all succeeded.
+          npm run build:desktop -- --publish never --linux --x64 \
             -c.appId=sh.paseo.desktop.edge \
             -c.productName="Paseo Edge" \
+            -c.deb.packageName=paseo-edge \
+            -c.rpm.packageName=paseo-edge \
             -c.appImage.artifactName='Paseo-Edge-${arch}.${ext}' \
             -c.linux.artifactName='Paseo-Edge-${version}-${arch}.${ext}' \
             -c.publish.owner=josham \

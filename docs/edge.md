@@ -73,9 +73,9 @@ electron-builder's bundled fpm is built against an older glibc. Install
 `libxcrypt-compat`, or ignore it: the AppImage and tar.gz are produced before fpm runs,
 and CI builds on ubuntu where the library is present.
 
-The release builds AppImage, deb and tar.gz — no rpm. `rpmbuild` rejects a package name
-containing a space, so "Paseo Edge" produces an invalid spec. Keeping the readable
-product name beat keeping an rpm none of us installs.
+The release builds AppImage, deb, rpm and tar.gz. `rpmbuild` rejects a Name tag
+containing a space, which failed the first 1.0.0 build, so deb and rpm take
+`packageName=paseo-edge` while `productName` keeps the space for display.
 
 ## Installing
 
@@ -89,8 +89,28 @@ projects and agents) and `~/.config/Paseo` (Electron settings and window state, 
 
 The shared userData means a shared single-instance lock. Launching Edge while stock
 Paseo is running does not open an Edge window — it focuses the running stock Paseo and
-exits, which looks like the AppImage did nothing. Quit the stock app first. This is
-worth keeping: the two would otherwise fight over the same daemon on port 6767.
+exits, which looks like the AppImage did nothing. Quit the stock app first, or use the
+launcher below to run both.
+
+## Running Edge beside a stock Paseo
+
+```bash
+scripts/edge/install-launcher.sh [/path/to/Paseo-Edge-x86_64.AppImage]
+```
+
+This installs `~/.local/bin/paseo-edge` and a "Paseo Edge" desktop entry. The launcher
+points Edge at its own Electron profile through `PASEO_ELECTRON_USER_DATA_DIR`, which
+`packages/desktop/src/main.ts` honours in packaged builds and applies before
+`requestSingleInstanceLock()`, so the two apps no longer share a lock.
+
+It seeds that profile once with `manageBuiltInDaemon: false`. A fresh profile would
+otherwise take the default of `true` and start a second daemon over the same
+`~/.paseo` while one is already running. Edge is a second client on the existing
+daemon, so it sees your real projects and agents.
+
+Edge starts with no pairing, workspace or appearance state: those live in the
+profile's `Local Storage` and `IndexedDB`, and copying them out from under a running
+stock Paseo would risk corrupting live LevelDB stores.
 
 ## Versions
 
