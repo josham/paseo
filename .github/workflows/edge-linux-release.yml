@@ -112,6 +112,42 @@ jobs:
           fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
           NODE
 
+      - name: Stamp the Edge build version into the app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Settings -> About reads packages/app/package.json for "App version", and that
+          # number has to stay upstream's: the host page compares it to the daemon's
+          # version, so claiming the Edge number there would report a mismatch against
+          # every daemon on upstream numbering. The Edge version rides on its own constant
+          # instead, from the edge/about-edge-build-row branch.
+          stamp="packages/app/src/utils/edge-build.ts"
+          if [[ ! -f "$stamp" ]]; then
+            echo "::notice::$stamp is absent (branch retired?) — skipping the Edge build stamp"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const file = 'packages/app/src/utils/edge-build.ts';
+          const version = process.env.EDGE_VERSION;
+          if (!version) throw new Error('EDGE_VERSION env var is missing');
+
+          const placeholder = 'export const EDGE_BUILD_VERSION = "dev";';
+          const source = fs.readFileSync(file, 'utf8');
+          // Loud rather than silent: a renamed constant would otherwise ship a build that
+          // calls itself "dev" and hides the row it exists to render.
+          if (!source.includes(placeholder)) {
+            throw new Error(`${file} no longer contains ${placeholder}`);
+          }
+
+          fs.writeFileSync(
+            file,
+            source.replace(placeholder, `export const EDGE_BUILD_VERSION = "${version}";`),
+          );
+          NODE
+          grep -n 'EDGE_BUILD_VERSION' "$stamp"
+
       - name: Install Linux smoke display
         run: sudo apt-get update && sudo apt-get install -y xvfb xauth
 

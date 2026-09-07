@@ -166,6 +166,19 @@ electron-updater only ever compares it against our own releases, and a plain `X.
 with no prerelease suffix is what its `channel=latest`, `allowPrerelease=false`
 configuration expects. Which upstream commit a build came from is in the release notes.
 
+Two numbers therefore live in every build, and Settings -> About shows both. **App
+version** is upstream's, read from `packages/app/package.json`, and it stays upstream's on
+purpose: the host page compares that string against the daemon's version, so putting the
+Edge number there would report a permanent mismatch to every client of a daemon on
+upstream numbering, the stock mobile app included. **Edge build** is ours, carried by
+`EDGE_BUILD_VERSION` in `packages/app/src/utils/edge-build.ts` (the
+`edge/about-edge-build-row` branch), which the release workflow rewrites from the tag it
+is building. A build made anywhere else keeps the `"dev"` placeholder and the row is not
+rendered at all, so nothing about upstream's About screen changes.
+
+`packages/desktop/package.json` gets the Edge version too, but only because
+electron-builder and electron-updater read it; it never reaches the UI.
+
 ## What the CI does and does not run
 
 Pushing a branch here runs nothing: upstream's `ci.yml` only triggers on `main` and on
