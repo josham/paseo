@@ -98,7 +98,10 @@ launcher below to run both.
 scripts/edge/install-launcher.sh [/path/to/Paseo-Edge-x86_64.AppImage]
 ```
 
-This installs `~/.local/bin/paseo-edge` and a "Paseo Edge" desktop entry. The launcher
+This installs `~/.local/bin/paseo-edge`, a "Paseo Edge" desktop entry, and a
+`paseo-edge` icon in the hicolor theme taken from `packages/desktop/assets/icon-dev.png`
+— the blue blueprint mark upstream uses for unpackaged runs, so Edge and a stock Paseo
+are told apart in a launcher without editing an image. The launcher
 points Edge at its own Electron profile through `PASEO_ELECTRON_USER_DATA_DIR`, which
 `packages/desktop/src/main.ts` honours in packaged builds and applies before
 `requestSingleInstanceLock()`, so the two apps no longer share a lock.

@@ -15,12 +15,38 @@ set -euo pipefail
 APPIMAGE_DEFAULT="$HOME/Applications/Paseo-Edge-x86_64.AppImage"
 appimage="${1:-$APPIMAGE_DEFAULT}"
 
+repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+
 bin_dir="$HOME/.local/bin"
 launcher="$bin_dir/paseo-edge"
 desktop_dir="$HOME/.local/share/applications"
 desktop_entry="$desktop_dir/paseo-edge.desktop"
+icon_root="$HOME/.local/share/icons/hicolor"
 
 mkdir -p "$bin_dir" "$desktop_dir" "$(dirname "$appimage")"
+
+# Edge takes the dev-build icon: a blue blueprint version of the same mark, already
+# in the repo for unpackaged runs (packages/desktop/src/main.ts:573). Stock Paseo's is
+# black, so the two are told apart in a launcher or taskbar without editing an image.
+icon_src="$repo_root/packages/desktop/assets/icon-dev.png"
+if [[ -f "$icon_src" ]]; then
+  if command -v magick > /dev/null; then
+    for size in 512 256 128 64 48; do
+      mkdir -p "$icon_root/${size}x${size}/apps"
+      magick "$icon_src" -resize "${size}x${size}" "$icon_root/${size}x${size}/apps/paseo-edge.png"
+    done
+  else
+    mkdir -p "$icon_root/512x512/apps"
+    cp "$icon_src" "$icon_root/512x512/apps/paseo-edge.png"
+  fi
+  if command -v gtk-update-icon-cache > /dev/null && [[ -f "$icon_root/index.theme" ]]; then
+    gtk-update-icon-cache -q -t "$icon_root" || true
+  fi
+  icon_installed=true
+else
+  echo "warning: $icon_src not found; the launcher entry will have no icon." >&2
+  icon_installed=false
+fi
 
 cat > "$launcher" <<LAUNCHER
 #!/usr/bin/env bash
@@ -93,6 +119,9 @@ ENTRY
 echo "installed:"
 echo "  $launcher"
 echo "  $desktop_entry"
+if [[ "$icon_installed" == true ]]; then
+  echo "  $icon_root/*/apps/paseo-edge.png"
+fi
 echo
 echo "AppImage expected at: $appimage"
 if [[ ! -x "$appimage" ]]; then
