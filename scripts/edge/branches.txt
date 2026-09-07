@@ -15,4 +15,5 @@ fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped 
 fix/app-update-preserves-external-daemon  # App updates leave an externally managed daemon running (upstream PR #4429)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (upstream PR #3723, mvanhorn)
+pr/2452-pdf-preview  # Preview PDFs in the file panel (upstream PR #2452, bendavid)
 pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstream PR #2453, bendavid)
