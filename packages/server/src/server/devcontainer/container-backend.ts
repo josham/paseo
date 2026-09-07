@@ -161,6 +161,16 @@ export interface ContainerBackend {
   getConfigHash(workspaceFolder: string): string | null;
 
   /**
+   * Whether this backend mounts the workspace at the same path it has on the
+   * host. A worktree there keeps working with the ordinary absolute links, so
+   * the caller can skip the relative ones and the repository-wide git extension
+   * they set. A backend that cannot tell answers false.
+   *
+   * Asked of the source checkout, before the worktree it decides for exists.
+   */
+  preservesHostWorkspacePath(workspaceFolder: string): Promise<boolean>;
+
+  /**
    * Check whether a container is already running for this workspace (e.g.
    * from a previous daemon session). Used on startup to decide whether to
    * reuse an existing container or start fresh.
