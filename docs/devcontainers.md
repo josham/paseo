@@ -67,12 +67,18 @@ main/.git/worktrees/wt/gitdir    →  /repo/wt/.git                  ← absolut
 
 Only the workspace folder is mounted, so the first dangles and the agent gets `fatal: not a git repository`.
 
-`devcontainer up --mount-git-worktree-common-dir` mounts the git directory where the relative link resolves. It only works when the worktree's links **are** relative, and it does nothing at all otherwise: no warning, no error, `outcome: success`, git still dead. So the decision is made at creation, from two facts already in hand:
+`devcontainer up --mount-git-worktree-common-dir` mounts the git directory where the relative link resolves — `main/.git` at `/workspaces/main/.git`, for a worktree mounted at `/workspaces/wt`. It does nothing at all when it does not apply: no warning, no error, `outcome: success`, git still dead. Two things switch it off, and only one of them is documented:
+
+- The worktree's links are **not** relative.
+- The config mounts the workspace **itself** — an explicit `workspaceMount`, or a compose project. The git mount rides on the CLI's own default mount and is dropped with it. Verified by inspecting the mounts of containers started both ways.
+
+So the decision is made at creation, from three facts:
 
 - **Is this a worktree?** The new-workspace request says so — it is what the user chose in the isolation picker. Nothing stats the directory for it, which would also read a submodule's `.git` file as a worktree's.
+- **Does the container keep the workspace at its host path?** Then absolute links already resolve inside it and nothing else is asked. Only a config that mounts the workspace itself can, since the CLI's own mount targets `/workspaces/<name>` — which is also why the answer is safe: such a container was never getting the CLI's git mount, so relative links would have bought it nothing. `devcontainer read-configuration` answers without starting anything, read on the source checkout because the worktree does not exist yet: `workspaceFolder` is where the container works, `workspaceMount` where the files land, and **both** have to name the host folder. They disagree more often than not — a config asking for `${localWorkspaceFolder}` and nothing else gets that folder as its working directory and the files under `/workspaces/<name>` anyway. A compose project reports no mount, because compose owns it, so there the folder is the whole answer.
 - **Can git read relative links?** Only the **host's** git is checked. That looks like an omission and is not: linking one worktree relatively marks the whole _repository_ with `extensions.relativeWorktrees`, so the choice is not per-container. Every workspace on that repository lives with it — sibling worktrees, the main checkout, and whichever containers each of them runs in — so asking one image would answer for all of them.
 
-If the workspace has a container backend and the host's git is 2.48+, the worktree is created with `--relative-paths` and its container starts with `--mount-git-worktree-common-dir`. Otherwise it is created the ordinary way, and the agent's git sees nothing — as before.
+If the workspace has a container backend that remaps the workspace path, and the host's git is 2.48+, the worktree is created with `--relative-paths`; a worktree's container starts with `--mount-git-worktree-common-dir` either way. Otherwise it is created the ordinary way — which is what a path-preserving container wants, and which for a remapped one leaves the agent's git seeing nothing, as before.
 
 **What an old git in the image does then.** It refuses the repository outright:
 
@@ -81,7 +87,9 @@ fatal: unknown repository extensions found:
 	relativeworktrees
 ```
 
-and it refuses it for **every workspace on that repository**, not only the worktree — including a plain non-worktree workspace on the main checkout. A separate clone is unaffected, because the extension is per-repository and clones do not inherit it. This is the cost of the feature being repo-wide, and it is why the host gate is the honest place to draw the line: an image that old could not have used a relative worktree anyway.
+and it refuses it for **every workspace on that repository**, not only the worktree — including a plain non-worktree workspace on the main checkout, and the user's own git on the host. A separate clone is unaffected, because the extension is per-repository and clones do not inherit it.
+
+This is the cost of the feature being repo-wide, and it is why the path question is asked first. Debian bookworm ships git 2.39, trixie 2.47, and bookworm-backports has no git package at all, so an image on any of them is below the line and cannot be argued up to it. A container that keeps the host path gives the agent a working git without the extension; only one that remaps the path is worth marking the repository for, and there an image that old could not have used a relative worktree anyway.
 
 **Worktrees are also locked.** `git worktree prune` deletes the admin directory (HEAD, index, reflog) of any worktree whose `gitdir` names a missing path, and `git gc` runs it on a three-month timer. A container mounts one worktree, so every _sibling_ reads as missing from inside it — an agent running `git gc` there would delete another workspace's state, and `git worktree repair` cannot undo it. `git worktree lock` at creation makes that impossible.
 
