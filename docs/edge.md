@@ -124,9 +124,23 @@ launcher below to run both.
 
 ## Running Edge beside a stock Paseo
 
+From a checkout:
+
 ```bash
 scripts/edge/install-launcher.sh [/path/to/Paseo-Edge-x86_64.AppImage]
 ```
+
+Without one — this is the path if someone sent you a link rather than a clone. Download
+it, read it, then run it; it writes to `~/.local`, so it is worth the ten seconds:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/josham/paseo/edge/tooling/scripts/edge/install-launcher.sh
+less install-launcher.sh
+bash install-launcher.sh ~/Applications/Paseo-Edge-x86_64.AppImage
+```
+
+Outside a checkout there is no repo to take the icon from, so it fetches that from the
+fork instead. Nothing else differs.
 
 This installs `~/.local/bin/paseo-edge`, a "Paseo Edge" desktop entry, and a
 `paseo-edge` icon in the hicolor theme taken from `packages/desktop/assets/icon-dev.png`

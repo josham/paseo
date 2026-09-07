@@ -15,7 +15,13 @@ set -euo pipefail
 APPIMAGE_DEFAULT="$HOME/Applications/Paseo-Edge-x86_64.AppImage"
 appimage="${1:-$APPIMAGE_DEFAULT}"
 
-repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+# Inside a checkout the icon is right there. Run standalone — `curl ... | bash`, which
+# is how anyone without a clone installs this — there is no repo to resolve, so fall
+# back to fetching it from the fork. Guarded because `set -e` would abort on the miss.
+repo_root=""
+if repo_root_try="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)"; then
+    repo_root="$repo_root_try"
+fi
 
 bin_dir="$HOME/.local/bin"
 launcher="$bin_dir/paseo-edge"
@@ -29,6 +35,11 @@ mkdir -p "$bin_dir" "$desktop_dir" "$(dirname "$appimage")"
 # in the repo for unpackaged runs (packages/desktop/src/main.ts:573). Stock Paseo's is
 # black, so the two are told apart in a launcher or taskbar without editing an image.
 icon_src="$repo_root/packages/desktop/assets/icon-dev.png"
+if [ ! -f "$icon_src" ]; then
+    icon_src="$(mktemp -d)/icon-dev.png"
+    curl -fsSL -o "$icon_src" \
+        "https://raw.githubusercontent.com/josham/paseo/edge/tooling/packages/desktop/assets/icon-dev.png"
+fi
 if [[ -f "$icon_src" ]]; then
   if command -v magick > /dev/null; then
     for size in 512 256 128 64 48; do
