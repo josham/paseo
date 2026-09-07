@@ -142,6 +142,7 @@ export function findByType<T extends SessionOutboundMessage["type"]>(
 export interface ProviderSnapshotManagerSpies {
   getSnapshot: ReturnType<typeof vi.fn<ProviderSnapshotManager["getSnapshot"]>>;
   refreshSnapshotForCwd: ReturnType<typeof vi.fn<ProviderSnapshotManager["refreshSnapshotForCwd"]>>;
+  probeSnapshotForCwd: ReturnType<typeof vi.fn<ProviderSnapshotManager["probeSnapshotForCwd"]>>;
   refreshSettingsSnapshot: ReturnType<
     typeof vi.fn<ProviderSnapshotManager["refreshSettingsSnapshot"]>
   >;
@@ -179,6 +180,7 @@ export function createProviderSnapshotManagerStub(): {
   const refreshSnapshotForCwd = vi.fn<ProviderSnapshotManager["refreshSnapshotForCwd"]>(
     async () => {},
   );
+  const probeSnapshotForCwd = vi.fn<ProviderSnapshotManager["probeSnapshotForCwd"]>(async () => []);
   const refreshSettingsSnapshot = vi.fn<ProviderSnapshotManager["refreshSettingsSnapshot"]>(
     async () => {},
   );
@@ -233,6 +235,7 @@ export function createProviderSnapshotManagerStub(): {
   const stub = {
     getSnapshot,
     refreshSnapshotForCwd,
+    probeSnapshotForCwd,
     refreshSettingsSnapshot,
     warmUpSnapshotForCwd,
     listRegisteredProviderIds,
@@ -259,6 +262,7 @@ export function createProviderSnapshotManagerStub(): {
     manager,
     getSnapshot,
     refreshSnapshotForCwd,
+    probeSnapshotForCwd,
     refreshSettingsSnapshot,
     warmUpSnapshotForCwd,
     listRegisteredProviderIds,

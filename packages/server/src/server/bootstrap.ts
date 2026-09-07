@@ -129,6 +129,9 @@ import type { OpenAiSpeechProviderConfig } from "./speech/providers/openai/confi
 import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
+import { createDevContainerBackend, createLaunchStrategyRegistry } from "./devcontainer/index.js";
+import { createContainerBackendRegistry } from "./devcontainer/container-backend-registry.js";
+import { ContainerNotRunningError } from "./devcontainer/launch-strategy-registry.js";
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
@@ -652,6 +655,30 @@ export async function createPaseoDaemon(
   });
   applyTerminalAgentHookSetting({ store: daemonConfigStore, logger });
 
+  // Isolated execution support — check whether a container backend is
+  // available on this host. The result is advertised as a server_info feature
+  // flag so clients can gate container UI on daemon capability.
+  // Currently only the devcontainer backend (devcontainer CLI + Docker) is
+  // supported, but the architecture is pluggable: swap createDevContainerBackend
+  const containerBackend = createDevContainerBackend({ logger });
+  const containerBackends = createContainerBackendRegistry([containerBackend]);
+  const launchStrategyRegistry = createLaunchStrategyRegistry({
+    logger,
+    createStrategy: containerBackend.createStrategy,
+  });
+  const devContainerAvailable = await containerBackend.isAvailable();
+  if (devContainerAvailable) {
+    logger.info("Isolated execution support is available (devcontainer CLI + Docker detected)");
+    // Probe containers are scratch, so any that survived a previous run belong
+    // to a probe that was killed before it could clean up. Fire-and-forget:
+    // nothing waits on garbage collection.
+    void containerBackend.removeAbandonedProbeContainers().catch((error: unknown) => {
+      logger.warn({ err: error }, "Failed to remove abandoned probe containers");
+    });
+  } else {
+    logger.debug("Isolated execution support is not available");
+  }
+
   const serviceProxyPublicBaseUrl = config.serviceProxy?.publicBaseUrl
     ? config.serviceProxy.publicBaseUrl
     : null;
@@ -904,6 +931,27 @@ export async function createPaseoDaemon(
       managedProcesses,
       isDev: config.isDev === true,
       extraClients: config.agentClients,
+      resolveLaunchStrategy: async (cwd) => {
+        if (!launchStrategyRegistry) return null;
+        const workspaces = (await workspaceRegistry?.list()) ?? [];
+        const workspaceId = resolveWorkspaceIdForPath(cwd, workspaces);
+        // Host workspaces (and paths that belong to no workspace) run provider
+        // probes on the host, as they always have. The new-workspace screen's
+        // container probe does not come through here at all — it hands the
+        // snapshot manager the strategy for its own throwaway container.
+        const workspace = workspaces.find((entry) => entry.workspaceId === workspaceId);
+        const key = workspace?.containerBackend ? workspaceId : null;
+        if (!key) return null;
+        // Strict: a workspace-scoped catalog refresh must use the container's
+        // tool, not the host's. When there is no container the caller decides
+        // what that means — the snapshot reports unavailable, agent creation
+        // refuses.
+        const strategy = await launchStrategyRegistry.awaitStrategy(key);
+        if (!strategy.isIsolated) {
+          throw new ContainerNotRunningError(key);
+        }
+        return strategy;
+      },
     },
   });
   const providerSnapshotManager = agentProviderRuntime.snapshotManager;
@@ -931,6 +979,28 @@ export async function createPaseoDaemon(
     mcpAuthToken: agentMcpAuthToken,
     resolvePaseoToolPolicy: (provider) =>
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
+    launchStrategyRegistry,
+    resolveLaunchStrategy: async (cwd, workspaceId) => {
+      if (!launchStrategyRegistry) return null;
+      // Catalog/metadata ops call with cwd only — resolve workspaceId from cwd.
+      if (!workspaceId) {
+        const workspaces = await workspaceRegistry?.list();
+        workspaceId = workspaces
+          ? (resolveWorkspaceIdForPath(cwd, workspaces) ?? undefined)
+          : undefined;
+      }
+      if (!workspaceId) return null;
+      const workspace = await workspaceRegistry?.get(workspaceId);
+      if (!workspace?.containerBackend) return null; // null = host
+      // awaitStrategy throws if the container fails to start. If it returns
+      // a non-isolated strategy, the container hasn't started yet — treat
+      // this as an error, not a fallback to host.
+      const strategy = await launchStrategyRegistry.awaitStrategy(workspaceId);
+      if (!strategy.isIsolated) {
+        throw new ContainerNotRunningError(workspaceId);
+      }
+      return strategy;
+    },
     logger,
   });
   const syncPluginProviders = () => {
@@ -1717,6 +1787,9 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              devContainerAvailable,
+              launchStrategyRegistry,
+              containerBackends,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
