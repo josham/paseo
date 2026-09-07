@@ -1,6 +1,10 @@
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactElement, RefObject } from "react";
+import {
+  useContainerProviderProbe,
+  type ContainerProbeStatus,
+} from "@/hooks/use-container-provider-probe";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Pressable, StyleSheet as RNStyleSheet, Text, View } from "react-native";
@@ -9,7 +13,14 @@ import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles"
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Folder, FolderPlus, GitBranch, GitPullRequest } from "lucide-react-native";
+import {
+  ChevronDown,
+  Container,
+  Folder,
+  FolderPlus,
+  GitBranch,
+  GitPullRequest,
+} from "lucide-react-native";
 import { Composer } from "@/composer";
 import { KeyboardTranslateView } from "@/components/keyboard-translate-view";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
@@ -48,6 +59,10 @@ import {
   useHosts,
   type HostRuntimeConnectionStatus,
 } from "@/runtime/host-runtime";
+import {
+  selectableContainerBackends,
+  useContainerBackendAvailability,
+} from "@/hooks/use-container-backend-availability";
 import { useHostFeature, useHostFeatureMap } from "@/runtime/host-features";
 import type { HostProfile } from "@/types/host-connection";
 import {
@@ -212,6 +227,10 @@ const PROJECT_PICK_ACTIONS: readonly KeyboardActionId[] = ["workspace.project.pi
 // Height of a single picker-trigger badge. The Base-row spacer reserves exactly
 // this so toggling Isolation to Local hides the row without shifting the form.
 const BADGE_HEIGHT = 28;
+// A picker's caption line, plus the gap to its trigger. The Base-row spacer
+// reserves a whole field (caption + gap + badge) so toggling Isolation to Local
+// hides the row without shifting the form.
+const PICKER_LABEL_LINE_HEIGHT = 16;
 
 function RefPickerBadgeContent({
   selectedItem,
@@ -458,6 +477,56 @@ function IsolationOptionItem({
   );
 }
 
+function containerBackendLabel(t: TFunction, backend: string | null): string {
+  return backend === null
+    ? t("workspaceSetup.containerBackend.host")
+    : t("workspaceSetup.containerBackend.devcontainer");
+}
+
+function ContainerBackendOptionItem({
+  optionId,
+  label,
+  selected,
+  active,
+  disabled,
+  onPress,
+  iconColor,
+  iconSize,
+}: {
+  optionId: string;
+  label: string;
+  selected: boolean;
+  active: boolean;
+  disabled: boolean;
+  onPress: () => void;
+  iconColor: string;
+  iconSize: number;
+}) {
+  const leadingSlot = useMemo(
+    () => (
+      <View style={styles.rowIconBox}>
+        {optionId === "host" ? (
+          <Folder size={iconSize} color={iconColor} />
+        ) : (
+          <Container size={iconSize} color={iconColor} />
+        )}
+      </View>
+    ),
+    [optionId, iconSize, iconColor],
+  );
+  return (
+    <ComboboxItem
+      testID={`workspace-create-container-backend-${optionId}`}
+      label={label}
+      selected={selected}
+      active={active}
+      disabled={disabled}
+      onPress={onPress}
+      leadingSlot={leadingSlot}
+    />
+  );
+}
+
 function ProjectOptionItem({
   testID,
   projectViewKey,
@@ -678,6 +747,49 @@ function IsolationPickerTrigger({
   );
 }
 
+function ContainerBackendPickerTrigger({
+  pickerAnchorRef,
+  onPress,
+  disabled,
+  badgePressableStyle,
+  containerBackend,
+  label,
+  iconColor,
+  iconSize,
+}: {
+  pickerAnchorRef: React.RefObject<View | null>;
+  onPress: () => void;
+  disabled: boolean;
+  badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
+  containerBackend: string | null;
+  label: string;
+  iconColor: string;
+  iconSize: number;
+}) {
+  return (
+    <ComboboxTrigger
+      ref={pickerAnchorRef}
+      testID="workspace-create-container-backend-trigger"
+      onPress={onPress}
+      disabled={disabled}
+      style={badgePressableStyle}
+      accessibilityRole="button"
+      accessibilityLabel="Container backend"
+    >
+      <View style={styles.badgeIconBox}>
+        {containerBackend === null ? (
+          <Folder size={iconSize} color={iconColor} />
+        ) : (
+          <Container size={iconSize} color={iconColor} />
+        )}
+      </View>
+      <Text style={styles.badgeText} numberOfLines={1}>
+        {label}
+      </Text>
+    </ComboboxTrigger>
+  );
+}
+
 // Wraps a single argument control in the mobile vertical stack. On desktop the
 // controls are laid out in one horizontal row, so no per-control wrapper is used.
 function FormRow({ children }: { children: React.ReactNode }) {
@@ -814,6 +926,7 @@ async function createMultiplicityWorkspace(input: {
   ) => void;
   serverId: string;
   createFailedMessage: string;
+  containerBackend: string | null;
 }): Promise<ReturnType<typeof normalizeWorkspaceDescriptor>> {
   const projectId = getHostProjectId(input.project, input.serverId);
   if (!projectId) throw new Error("Project is not available on the selected host");
@@ -837,6 +950,7 @@ async function createMultiplicityWorkspace(input: {
           projectId,
         },
     ...(firstAgentContext ? { firstAgentContext } : {}),
+    containerBackend: input.containerBackend,
   });
   if (payload.error || !payload.workspace) {
     throw new Error(payload.error ?? input.createFailedMessage);
@@ -1316,6 +1430,14 @@ interface NewWorkspaceFormStackInput {
     renderOption: RefPickerRenderOption;
     canCreateWorktree: boolean;
   };
+  containerBackend: FormPickerControl & {
+    probeStatus: ContainerProbeStatus;
+    value: string | null;
+    options: ComboboxOptionType[];
+    onSelect: (id: string) => void;
+    renderOption: RefPickerRenderOption;
+    canShow: boolean;
+  };
   base: FormPickerControl & {
     selectedSourceDirectory: string | null;
     selectedItem: PickerItem | null;
@@ -1337,15 +1459,22 @@ interface NewWorkspaceFormStackInput {
   };
 }
 
+// oxlint-disable-next-line eslint(complexity): one branch per optional picker row
 function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactElement {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
-  const { isCompact, isPending, project, host, isolation, base, launch } = input;
+  const { isCompact, isPending, project, host, isolation, containerBackend, base, launch } = input;
 
   const selectedHostLabel =
     host.allHosts.find((h) => h.serverId === host.selectedServerId)?.label ?? "Host";
   const showHostControl = host.allHosts.length > 1;
   const isolationTriggerLabel = isolationLabel(t, isolation.effectiveIsolation);
+  const containerBackendBaseLabel = containerBackendLabel(t, containerBackend.value);
+  // Building a container takes minutes on a first run; the badge has to say so.
+  const containerBackendTriggerLabel =
+    containerBackend.probeStatus === "probing"
+      ? t("workspaceSetup.containerBackend.probing", { backend: containerBackendBaseLabel })
+      : containerBackendBaseLabel;
   const addProjectAction = useMemo(
     () => <AddProjectPickerAction onPress={project.onAddProject} />,
     [project.onAddProject],
@@ -1470,6 +1599,32 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
     </View>
   ) : null;
 
+  const containerBackendControl = containerBackend.canShow ? (
+    <View style={desktopControlStyle}>
+      <ContainerBackendPickerTrigger
+        pickerAnchorRef={containerBackend.anchorRef}
+        onPress={containerBackend.open}
+        disabled={isPending}
+        badgePressableStyle={badgePressableStyle}
+        containerBackend={containerBackend.value}
+        label={containerBackendTriggerLabel}
+        iconColor={theme.colors.foregroundMuted}
+        iconSize={theme.iconSize.sm}
+      />
+      <Combobox
+        options={containerBackend.options}
+        value={containerBackend.value ?? "host"}
+        onSelect={containerBackend.onSelect}
+        title={t("workspaceSetup.containerBackend.label")}
+        open={containerBackend.openState}
+        onOpenChange={containerBackend.onOpenChange}
+        desktopPlacement="bottom-start"
+        anchorRef={containerBackend.anchorRef}
+        renderOption={containerBackend.renderOption}
+      />
+    </View>
+  ) : null;
+
   const baseControl = base.showRefPicker ? (
     <View style={desktopControlStyle}>
       <RefPickerTrigger
@@ -1518,6 +1673,7 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
       <FormRow>{projectControl}</FormRow>
       {hostControl ? <FormRow>{hostControl}</FormRow> : null}
       {isolationControl ? <FormRow>{isolationControl}</FormRow> : null}
+      {containerBackendControl ? <FormRow>{containerBackendControl}</FormRow> : null}
       {baseControl ? <FormRow>{baseControl}</FormRow> : null}
       <FormRow>{launchControl}</FormRow>
       {/* Keep fixed stack height without separating the visible controls. */}
@@ -1529,6 +1685,7 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
       {projectControl}
       {hostControl}
       {isolationControl}
+      {containerBackendControl}
       {baseControl}
       <View style={styles.launchSpacer} />
       {launchControl}
@@ -1536,6 +1693,7 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
   );
 }
 
+// oxlint-disable-next-line eslint(complexity): screen has many UI states
 export function NewWorkspaceScreen({
   serverId,
   sourceDirectory: sourceDirectoryProp,
@@ -1584,11 +1742,13 @@ export function NewWorkspaceScreen({
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const openAddProjectPicker = useOpenAddProject();
   const [isolationPickerOpen, setIsolationPickerOpen] = useState(false);
+  const [containerBackendPickerOpen, setContainerBackendPickerOpen] = useState(false);
   const [pickerSearchQuery, setPickerSearchQuery] = useState("");
   const [debouncedPickerSearchQuery, setDebouncedPickerSearchQuery] = useState("");
   const pickerAnchorRef = useRef<View>(null);
   const projectPickerAnchorRef = useRef<View>(null);
   const isolationPickerAnchorRef = useRef<View>(null);
+  const containerBackendPickerAnchorRef = useRef<View>(null);
   const hostPickerAnchorRef = useRef<View | null>(null);
   const isDraftHandoffActive = useIsNewWorkspaceDraftHandoffActive({ draftId, selectedServerId });
 
@@ -1635,6 +1795,7 @@ export function NewWorkspaceScreen({
   }, [pickerSearchQuery]);
 
   const workspace = createdWorkspace;
+  const isPending = isNewWorkspacePending({ pendingAction, isDraftHandoffActive });
   const client = useHostRuntimeClient(selectedServerId);
   const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const {
@@ -1653,6 +1814,27 @@ export function NewWorkspaceScreen({
     lastActiveProject,
     allowAllProjects: supportsWorkspaceMultiplicity,
   });
+  const { containerBackend, setContainerBackend, containerAvailability } =
+    useContainerBackendAvailability(client, selectedSourceDirectory ?? "");
+  // Model selection must show what the workspace will actually run: the host's
+  // providers, or the container's once a backend is picked.
+  const containerProbe = useContainerProviderProbe({
+    client,
+    serverId: selectedServerId,
+    cwd: selectedSourceDirectory ?? null,
+    containerBackend,
+  });
+  const reportedProbeErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (containerProbe.status !== "error" || !containerProbe.error) {
+      reportedProbeErrorRef.current = null;
+      return;
+    }
+    // The model list silently stays on the host's providers otherwise.
+    if (reportedProbeErrorRef.current === containerProbe.error) return;
+    reportedProbeErrorRef.current = containerProbe.error;
+    toast.error(t("workspaceSetup.containerBackend.probeFailed", { error: containerProbe.error }));
+  }, [containerProbe.status, containerProbe.error, toast, t]);
   const projectIconTargets = useMemo(
     () => buildNewWorkspaceProjectIconTargets(projects, selectedServerId),
     [projects, selectedServerId],
@@ -1714,7 +1896,6 @@ export function NewWorkspaceScreen({
   const worktreeSupport = selectedProject
     ? getWorktreeSupportForHostProject({ project: selectedProject, serverId: selectedServerId })
     : "unsupported";
-  const isPending = isNewWorkspacePending({ pendingAction, isDraftHandoffActive });
   const { effectiveIsolation, setIsolation, canCreateWorktree, showRefPicker } =
     useWorkspaceIsolation({
       supportsMultiplicity: supportsWorkspaceMultiplicity,
@@ -1919,6 +2100,62 @@ export function NewWorkspaceScreen({
     [isPending, theme.colors.foregroundMuted, theme.iconSize.sm],
   );
 
+  const openContainerBackendPicker = useCallback(() => {
+    setContainerBackendPickerOpen(true);
+  }, []);
+
+  const handleContainerBackendPickerOpenChange = useCallback((nextOpen: boolean) => {
+    setContainerBackendPickerOpen(nextOpen);
+  }, []);
+
+  // Host is always available. Each available backend that hasConfig is shown.
+  const containerBackendOptions = useMemo<ComboboxOptionType[]>(() => {
+    const hostOption = { id: "host", label: containerBackendLabel(t, null) };
+    return [
+      hostOption,
+      ...selectableContainerBackends(containerAvailability).map((backend) => ({
+        id: backend.id,
+        label: backend.label,
+      })),
+    ];
+  }, [containerAvailability, t]);
+
+  const handleSelectContainerBackendOption = useCallback(
+    (id: string) => {
+      setContainerBackend(id === "host" ? null : id);
+      setContainerBackendPickerOpen(false);
+    },
+    [setContainerBackend],
+  );
+
+  const renderContainerBackendOption = useCallback(
+    ({
+      option,
+      selected,
+      active,
+      onPress,
+    }: {
+      option: ComboboxOptionType;
+      selected: boolean;
+      active: boolean;
+      onPress: () => void;
+    }) => {
+      return (
+        <ContainerBackendOptionItem
+          optionId={option.id}
+          label={option.label}
+          selected={selected}
+          active={active}
+          disabled={isPending}
+          onPress={onPress}
+          iconColor={theme.colors.foregroundMuted}
+          iconSize={theme.iconSize.sm}
+        />
+      );
+    },
+    [isPending, theme.colors.foregroundMuted, theme.iconSize.sm],
+  );
+
   const handleClearDraft = useCallback(() => {
     // No-op: screen navigates away on success, text should stay for retry on error
   }, []);
@@ -2008,6 +2245,7 @@ export function NewWorkspaceScreen({
             mergeWorkspaces,
             serverId: selectedServerId,
             createFailedMessage: t("newWorkspace.errors.createWorktreeFailed"),
+            containerBackend,
           })
         : await createAndMergeWorkspace({
             client: connectedClient,
@@ -2021,6 +2259,7 @@ export function NewWorkspaceScreen({
     },
     [
       buildCreateWorktreeInput,
+      containerBackend,
       createdWorkspace,
       effectiveIsolation,
       mergeWorkspaces,
@@ -2197,9 +2436,24 @@ export function NewWorkspaceScreen({
         ? {
             ...composerState.agentControls,
             disabled: isPending,
+            // Retry has to ask whichever environment is selected. The form's
+            // own refresh is cwd-scoped, so with a container picked it answers
+            // about the host — or about whatever workspace already owns this
+            // directory — and replaces the container's models with those.
+            // The container answers for every provider at once, so the
+            // provider argument has nothing to narrow.
+            onRetryModelProvider: containerProbe.retry,
+            isRetryingModelProvider:
+              containerProbe.isRetrying || containerProbe.status === "probing",
           }
         : undefined,
-    [composerState, isPending],
+    [
+      composerState,
+      isPending,
+      containerProbe.retry,
+      containerProbe.isRetrying,
+      containerProbe.status,
+    ],
   );
 
   const pickerEmptyText =
@@ -2243,6 +2497,19 @@ export function NewWorkspaceScreen({
       onOpenChange: handleIsolationPickerOpenChange,
       renderOption: renderIsolationOption,
       canCreateWorktree,
+    },
+    containerBackend: {
+      anchorRef: containerBackendPickerAnchorRef,
+      open: openContainerBackendPicker,
+      value: containerBackend,
+      options: containerBackendOptions,
+      onSelect: handleSelectContainerBackendOption,
+      openState: containerBackendPickerOpen,
+      onOpenChange: handleContainerBackendPickerOpenChange,
+      renderOption: renderContainerBackendOption,
+      // Host on its own is not a choice, so there is nothing to pick.
+      canShow: containerBackendOptions.length > 1,
+      probeStatus: containerProbe.status,
     },
     base: {
       anchorRef: pickerAnchorRef,
@@ -2418,7 +2685,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[1],
   },
   baseSpacer: {
-    height: BADGE_HEIGHT,
+    height: BADGE_HEIGHT + PICKER_LABEL_LINE_HEIGHT + theme.spacing[1],
   },
   // Pushes the launch control to the trailing edge of the desktop meta row,
   // next to project/host/branch. The row's own right inset (formStackDesktop)
