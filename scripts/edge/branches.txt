@@ -12,3 +12,4 @@
 
 feat/configurable-content-width
 fix/numeric-settings-clamp-resync
+fix/app-update-preserves-external-daemon
