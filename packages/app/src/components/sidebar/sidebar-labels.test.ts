@@ -19,6 +19,8 @@ function workspace(
     workspaceDirectoryLabel: workspaceId,
     projectKind: "git",
     workspaceKind: "worktree",
+    containerStatus: undefined,
+    containerInfo: undefined,
     name: workspaceId,
     title: null,
     pinnedAt,

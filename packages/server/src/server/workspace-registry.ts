@@ -104,6 +104,14 @@ const PersistedWorkspaceRecordSchema = z.object({
   untrustedSource: UntrustedWorkspaceSourceSchema.optional(),
   // Public discovery visibility. Contents retain their ordinary lifecycle.
   background: z.boolean().optional().default(false),
+  // SHA-256 hash of the devcontainer.json used to build the running container.
+  // Compared on startup and file-watch to detect config drift. Null when no
+  // container has been built or no devcontainer.json exists.
+  containerConfigHash: z.string().nullable().default(null),
+  // The selected execution backend for this workspace. null = run agents and
+  // terminals directly on the host; a string (e.g. "devcontainer") is a
+  // backend ID looked up in the ContainerBackendRegistry.
+  containerBackend: z.string().nullable().default(null),
 });
 
 export type PersistedProjectRecord = z.infer<typeof PersistedProjectRecordSchema>;
@@ -687,6 +695,7 @@ export function createPersistedWorkspaceRecord(input: {
   labels?: string[];
   untrustedSource?: UntrustedWorkspaceSource;
   background?: boolean;
+  containerBackend?: string | null;
 }): PersistedWorkspaceRecord {
   const { background, ...rest } = input;
   return PersistedWorkspaceRecordSchema.parse({
@@ -701,6 +710,7 @@ export function createPersistedWorkspaceRecord(input: {
     archivedAt: input.archivedAt ?? null,
     autoArchivedChangeRequestUrl: input.autoArchivedChangeRequestUrl ?? null,
     pinnedAt: input.pinnedAt ?? null,
+    containerBackend: input.containerBackend ?? null,
   });
 }
 

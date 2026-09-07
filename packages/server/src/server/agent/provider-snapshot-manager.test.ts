@@ -26,6 +26,8 @@ import {
   resolveSnapshotCwd,
 } from "./provider-snapshot-manager.js";
 import { OpenCodeAgentClient } from "./providers/opencode-agent.js";
+import { ContainerNotRunningError } from "../devcontainer/launch-strategy-registry.js";
+import { LocalLaunchStrategy } from "../devcontainer/launch-strategy.js";
 
 const TEST_CAPABILITIES = {
   supportsStreaming: false,
@@ -110,6 +112,11 @@ function waitUntilAborted(signal?: AbortSignal): Promise<boolean> {
   return new Promise((_resolve, reject) => {
     signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
   });
+}
+
+/** An isAvailable that never settles until the probe's own deadline aborts it. */
+function availabilityUntilAborted(options?: { signal?: AbortSignal }): Promise<boolean> {
+  return waitUntilAborted(options?.signal);
 }
 
 function waitForDelay(delayMs: number): Promise<void> {
@@ -336,6 +343,57 @@ describe("ProviderSnapshotManager public surface", () => {
     }
   });
 
+  test("a stopped container makes providers unavailable, not errored", async () => {
+    // The model picker turns red on "error". A workspace whose container is
+    // merely stopped has an unknown tool list, which is not a failure the user
+    // can act on — and it used to paint every provider red.
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      resolveLaunchStrategy: async () => {
+        throw new ContainerNotRunningError("ws-1");
+      },
+    });
+    try {
+      await manager.refreshSnapshotForCwd({ cwd: "/repo/app", providers: ["claude"] });
+
+      const entry = manager
+        .getSnapshot("/repo/app")
+        .records.find(({ entry: e }) => e.provider === "claude")?.entry;
+      expect(entry?.status).toBe("unavailable");
+      expect(entry?.error).toContain("container is not running");
+    } finally {
+      manager.destroy();
+    }
+  });
+
+  test("an explicit host strategy skips the workspace's container entirely", async () => {
+    // The new-workspace screen points at a directory that may already hold a
+    // container-backed workspace; asking for Host must not consult it.
+    let resolverCalls = 0;
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      resolveLaunchStrategy: async () => {
+        resolverCalls += 1;
+        throw new ContainerNotRunningError("ws-1");
+      },
+    });
+    try {
+      await manager.refreshSnapshotForCwd({
+        cwd: "/repo/app",
+        providers: ["claude"],
+        launchStrategy: new LocalLaunchStrategy(),
+      });
+
+      expect(resolverCalls).toBe(0);
+      const entry = manager
+        .getSnapshot("/repo/app")
+        .records.find(({ entry: e }) => e.provider === "claude")?.entry;
+      expect(entry?.status).not.toBe("unavailable");
+    } finally {
+      manager.destroy();
+    }
+  });
+
   test("hasProvider reflects the built-in set and providerOverrides additions", () => {
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
@@ -557,7 +615,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("refreshTimeoutMs option overrides the default and yields a timeout error", async () => {
     // never-resolving isAvailable forces the timeout path
-    const isAvailable = vi.fn(waitUntilAborted);
+    const isAvailable = vi.fn(availabilityUntilAborted);
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 1,
@@ -594,7 +652,7 @@ describe("ProviderSnapshotManager public surface", () => {
         pi: { enabled: false },
       },
       extraClients: {
-        codex: createExtraClient("codex", { isAvailable: vi.fn(waitUntilAborted) }),
+        codex: createExtraClient("codex", { isAvailable: vi.fn(availabilityUntilAborted) }),
       },
     });
     manager.setRefreshTimeoutMs(1);
@@ -624,7 +682,8 @@ describe("ProviderSnapshotManager public surface", () => {
       },
       extraClients: {
         codex: createExtraClient("codex", {
-          isAvailable: (signal) => (recovered ? Promise.resolve(true) : waitUntilAborted(signal)),
+          isAvailable: (options) =>
+            recovered ? Promise.resolve(true) : waitUntilAborted(options?.signal),
         }),
       },
     });
@@ -808,7 +867,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("PASEO_PROVIDER_REFRESH_TIMEOUT_MS env var is honored when no option is given", async () => {
     vi.stubEnv("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", "1");
-    const isAvailable = vi.fn(waitUntilAborted);
+    const isAvailable = vi.fn(availabilityUntilAborted);
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
       providerOverrides: {
@@ -835,7 +894,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("PASEO_PROVIDER_REFRESH_TIMEOUT_MS env var is ignored when option is provided", async () => {
     vi.stubEnv("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", "1");
-    const isAvailable = vi.fn(waitUntilAborted);
+    const isAvailable = vi.fn(availabilityUntilAborted);
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 5,
@@ -2405,8 +2464,8 @@ describe("provider-owned catalogue identity", () => {
         async getCatalogCacheKey(options) {
           return options.scope === "workspace" ? identities.get(options.cwd) : undefined;
         },
-        async isAvailable(_signal, options) {
-          probes.push({ provider, options });
+        async isAvailable(options) {
+          probes.push({ provider, options: options?.catalog });
           return true;
         },
         async fetchCatalog(options) {
@@ -2728,9 +2787,10 @@ test("bounds each provider across workspaces without blocking another provider",
         },
       }),
       pi: createExtraClient("pi", {
-        async isAvailable(_signal, options) {
-          if (refreshing && options?.scope === "workspace") {
-            started.add(options.cwd);
+        async isAvailable(options) {
+          const catalog = options?.catalog;
+          if (refreshing && catalog?.scope === "workspace") {
+            started.add(catalog.cwd);
             peak = Math.max(peak, ++active);
             await pending;
             active--;

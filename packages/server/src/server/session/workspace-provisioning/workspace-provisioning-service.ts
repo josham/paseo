@@ -54,6 +54,7 @@ export interface CreateWorktreeWorkspaceInput {
   untrustedSource?: UntrustedWorkspaceSource;
   background?: boolean;
   callerWorkspaceId?: string;
+  containerBackend?: string | null;
 }
 
 export interface WorkspaceProvisioningService {
@@ -73,6 +74,7 @@ export interface WorkspaceProvisioningService {
       background?: boolean;
       callerWorkspaceId?: string;
     },
+    containerBackend?: string | null,
   ): Promise<PersistedWorkspaceRecord>;
   createWorkspaceForWorktree(
     input: CreateWorktreeWorkspaceInput,
@@ -245,6 +247,7 @@ export function createWorkspaceProvisioningService(deps: {
       background?: boolean;
       callerWorkspaceId?: string;
     },
+    containerBackend?: string | null,
   ): Promise<PersistedWorkspaceRecord> {
     const normalizedCwd = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(normalizedCwd);
@@ -261,6 +264,7 @@ export function createWorkspaceProvisioningService(deps: {
       createdAt: timestamp,
       updatedAt: timestamp,
       background: await resolveBackground(context),
+      containerBackend,
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: context?.expectsInitialAgent,
@@ -298,6 +302,7 @@ export function createWorkspaceProvisioningService(deps: {
       updatedAt: timestamp,
       ...(input.untrustedSource ? { untrustedSource: input.untrustedSource } : {}),
       background: await resolveBackground(input),
+      containerBackend: input.containerBackend,
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: input.expectsInitialAgent,
