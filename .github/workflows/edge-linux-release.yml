@@ -202,6 +202,53 @@ jobs:
           grep -q '^owner: josham$' "$feed" || { echo "::error::app-update.yml owner is not josham"; exit 1; }
           grep -q '^repo: paseo$' "$feed" || { echo "::error::app-update.yml repo is not paseo"; exit 1; }
 
+      - name: Pack the portable daemon bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The daemon ships as npm tarballs beside the app, not only inside it.
+          # `npm pack` is the only path that runs each package's prepack, and
+          # @getpaseo/server's prepack is what builds dist/ and the daemon web UI.
+          # Installing the repo straight from git would skip all of it: npm runs
+          # `prepare` for git deps, which none of these packages define, and npm has
+          # no way to address a subdirectory of a monorepo anyway.
+          #
+          # Runs after the desktop build on purpose. prepack starts with build:clean,
+          # so packing first would wipe the server dist electron-builder just consumed.
+          pack_dir="$RUNNER_TEMP/daemon-packs"
+          mkdir -p "$pack_dir"
+          npm pack \
+            --workspace=@getpaseo/highlight \
+            --workspace=@getpaseo/relay \
+            --workspace=@getpaseo/protocol \
+            --workspace=@getpaseo/client \
+            --workspace=@getpaseo/plugin \
+            --workspace=@getpaseo/server \
+            --workspace=@getpaseo/cli \
+            --pack-destination "$pack_dir"
+
+          # A bundle missing either of these still installs and still starts, and the
+          # loss only shows up later as a browser client that cannot load or a daemon
+          # that will not launch. Fail the build instead.
+          server_pack="$(find "$pack_dir" -name 'getpaseo-server-*.tgz' -print -quit)"
+          tar tzf "$server_pack" | grep -q 'package/dist/server/web-ui/' \
+            || { echo "::error::daemon bundle has no web UI"; exit 1; }
+          tar tzf "$server_pack" | grep -q 'package/dist/scripts/supervisor-entrypoint.js' \
+            || { echo "::error::daemon bundle has no supervisor entrypoint"; exit 1; }
+
+          # The tarballs keep upstream's version, deliberately: Settings -> About
+          # compares the app's version against the daemon's, so a daemon reporting the
+          # Edge number would look mismatched to every client. The Edge tag travels in
+          # this marker instead, and install-daemon.sh records it beside the prefix so
+          # a sync can tell which build is installed.
+          printf '%s\n' "$EDGE_TAG" > "$pack_dir/EDGE_TAG"
+
+          # Dropped into the release dir so the publish step's existing *.tar.gz glob
+          # picks it up with the rest of the artifacts.
+          tar czf "$DESKTOP_PACKAGE_PATH/release/paseo-edge-daemon-$EDGE_VERSION.tar.gz" \
+            -C "$pack_dir" .
+          ls -l "$DESKTOP_PACKAGE_PATH/release/paseo-edge-daemon-$EDGE_VERSION.tar.gz"
+
       - name: Stamp instant rollout
         shell: bash
         run: |
