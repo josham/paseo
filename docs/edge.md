@@ -38,12 +38,18 @@ git log --first-parent --format=%s edge-v1.1.0 | grep '^edge: merge '
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `main`                    | A mirror of `upstream/main`. Never commit to it.                                                                       |
 | `feat/*`, `fix/*`, `bd/*` | Ordinary work, cut from `upstream/main`. These are the branches that become upstream PRs.                              |
+| `pr/<number>-<slug>`      | A re-land of someone else's upstream PR, named for it.                                                                 |
 | `edge/tooling`            | This doc, `scripts/edge/`, and `.github/workflows/edge-linux-release.yml`. The only branch the fork owns.              |
 | `edge/main`               | Generated. Force-pushed by `scripts/edge/rebuild.sh` on every run. Do not commit to it and do not open PRs against it. |
 
 `edge/main` is rebuilt from scratch rather than maintained, which is what makes retiring
 a branch free: when its PR lands upstream, delete its line from
 `scripts/edge/branches.txt` and the next rebuild simply does not contain it.
+
+In practice few lines are ever retired. Upstream closes feature PRs and routes them to
+Discussions, and every feature in the list has been closed on those grounds — that is
+why Edge exists at all. Only fixes tend to land. `branches.txt` marks which is which,
+and names an author where the branch re-lands someone else's PR.
 
 Review still happens on the feature branches — the same ones that go upstream — not on
 `edge/main`.
