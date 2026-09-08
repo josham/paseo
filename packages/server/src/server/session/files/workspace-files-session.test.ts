@@ -4,6 +4,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import {
   type WorkspaceFilesSessionHost,
 } from "./workspace-files-session.js";
 import { DownloadTokenStore } from "../../file-download/token-store.js";
+import { MAX_PREVIEWABLE_FILE_BYTES } from "../../file-explorer/service.js";
 import type { SessionOutboundMessage } from "../../messages.js";
 
 const tempDirs: string[] = [];
@@ -53,6 +55,8 @@ function makeSubsystem(
       await options.emitBinary?.(frame);
     },
     hasBinaryChannel: () => hasBinary,
+    // A drained client; chunk pacing has its own tests in file-transfer-emitter.
+    getClientBufferedAmount: () => 0,
   };
   const paseoHome = makeDir("workspace-files-home-");
   const subsystem = new WorkspaceFilesSession({
@@ -372,6 +376,52 @@ describe("WorkspaceFilesSession", () => {
     ]);
   });
 
+  test("reads a pdf as binary with an application/pdf mime", async () => {
+    const cwd = makeDir("workspace-files-pdf-");
+    writeFileSync(join(cwd, "doc.pdf"), "%PDF-1.7\n1 0 obj\n<< >>\nendobj\n%%EOF\n");
+    const { subsystem, binary } = makeSubsystem({ hasBinaryChannel: true });
+
+    await subsystem.handleFileExplorerRequest({
+      type: "file_explorer_request",
+      cwd,
+      path: "doc.pdf",
+      mode: "file",
+      requestId: "req-pdf",
+      acceptBinary: true,
+    });
+
+    const begin = decodeFileTransferFrame(binary[0]);
+    if (begin?.opcode !== FileTransferOpcode.FileBegin) {
+      throw new Error("expected a FileBegin frame");
+    }
+    expect(begin.metadata.mime).toBe("application/pdf");
+    expect(begin.metadata.encoding).toBe("binary");
+  });
+
+  test("refuses to read a file past the preview size bound", async () => {
+    const cwd = makeDir("workspace-files-toolarge-");
+    const filePath = join(cwd, "huge.bin");
+    writeFileSync(filePath, "");
+    // Sparse: the cap is checked against stat before any bytes are read.
+    truncateSync(filePath, MAX_PREVIEWABLE_FILE_BYTES + 1);
+    const { subsystem, emitted, binary } = makeSubsystem({ hasBinaryChannel: true });
+
+    await subsystem.handleFileExplorerRequest({
+      type: "file_explorer_request",
+      cwd,
+      path: "huge.bin",
+      mode: "file",
+      requestId: "req-huge",
+      acceptBinary: true,
+    });
+
+    expect(binary).toEqual([]);
+    const message = emitted[0];
+    if (message?.type !== "file_explorer_response") {
+      throw new Error(`expected file_explorer_response, got ${message?.type}`);
+    }
+    expect(message.payload.error).toContain("too large to preview");
+  });
   test("rejects an over-budget file before opening a binary transfer", async () => {
     const cwd = makeDir("workspace-files-read-budget-");
     writeFileSync(join(cwd, "notes.txt"), "hello world");

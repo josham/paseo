@@ -1832,6 +1832,14 @@ export const fr: TranslationResources = {
       tooLargeToDisplay: "Ce fichier est trop volumineux pour être affiché",
       failedToLoad: "Échec du chargement du fichier",
       failedToLoadPreview: "Échec du chargement de l'aperçu du fichier",
+      pdf: {
+        title: "Aperçu du PDF",
+        loading: "Rendu du PDF...",
+        failed: "Impossible d’afficher ce PDF",
+        unsupportedPlatform:
+          "L’aperçu des PDF n’est pas encore pris en charge sur cette plateforme",
+        hostUpdateRequired: "Mettez à jour l’hôte pour afficher les PDF",
+      },
       editor: {
         fileSize: "Taille {{size}}",
         lines: "{{count}} lignes",
