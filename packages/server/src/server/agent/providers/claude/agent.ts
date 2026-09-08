@@ -143,6 +143,7 @@ import { importSessionFromPersistence } from "../../provider-session-import.js";
 import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
 import {
   checkProviderLaunchAvailable,
+  isCommandAvailableInContainer,
   createProviderEnv,
   createProviderEnvSpec,
   resolveProviderLaunch,
@@ -1780,10 +1781,11 @@ export class ClaudeAgentClient implements AgentClient {
     const strategy = options?.launchStrategy;
     if (strategy?.isIsolated) {
       // The host's copy is irrelevant: this session would run in the container.
-      return strategy
-        .resolveExecutable(CLAUDE_CONTAINER_COMMAND)
-        .then(() => true)
-        .catch(() => false);
+      return isCommandAvailableInContainer({
+        strategy,
+        command: CLAUDE_CONTAINER_COMMAND,
+        logger: this.logger,
+      });
     }
     const launch = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
