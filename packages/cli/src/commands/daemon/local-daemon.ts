@@ -6,6 +6,46 @@ import { loadConfig, resolvePaseoHome, spawnProcess } from "@getpaseo/server";
 import treeKill from "tree-kill";
 import { tryConnectToDaemon } from "../../utils/client.js";
 
+/**
+ * Detect whether `systemd-run --user` is available.
+ *
+ * A detached daemon has to outlive the session that started it. Under
+ * systemd-logind with `KillUserProcesses=yes` it does not: the daemon inherits
+ * the launching session's cgroup and is killed when that session ends —
+ * closing an SSH connection, logging out of a desktop session, or exiting the
+ * terminal that ran `paseo daemon start`. `systemd-run --user --scope` moves
+ * the daemon into its own transient scope so it survives all of those.
+ *
+ * This is what makes a daemon launched over SSH stay up after the setup
+ * connection closes; see `@getpaseo/protocol/ssh-lifecycle`.
+ *
+ * Pairs with `loginctl enable-linger`: without linger the user's systemd
+ * instance is stopped at last logout, taking the scope with it.
+ */
+function detectSystemdScopeSupport(): boolean {
+  if (process.platform !== "linux") return false;
+  if (!process.env.XDG_RUNTIME_DIR) return false;
+  try {
+    const result = spawnSync("systemd-run", ["--version"], { timeout: 2000, stdio: "ignore" });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort `loginctl enable-linger`. May be denied by polkit, and may
+ * already be on; neither is fatal, the daemon just reverts to dying with the
+ * user's last session.
+ */
+function enableSystemdLinger(): void {
+  try {
+    spawnSync("loginctl", ["enable-linger"], { timeout: 2000, stdio: "ignore" });
+  } catch {
+    // Linger may already be enabled, or polkit may deny it.
+  }
+}
+
 export interface DaemonStartOptions {
   port?: string;
   listen?: string;
@@ -82,6 +122,13 @@ export interface ForegroundDaemonProcessResult {
 export interface DaemonLaunchRuntime {
   resolveRunnerEntry(): string;
   resolveHome(env: NodeJS.ProcessEnv): string;
+  /**
+   * Whether to wrap the launch in a systemd scope so it survives the session
+   * that started it. See {@link detectSystemdScopeSupport}.
+   */
+  useSystemdScope(): boolean;
+  /** Keep the user's systemd instance alive after the last session closes. */
+  enableSystemdLinger(): void;
   spawnDetached(
     command: string,
     args: string[],
@@ -109,6 +156,8 @@ const defaultDaemonLaunchRuntime: DaemonLaunchRuntime = {
   resolveHome: resolvePaseoHome,
   spawnDetached: spawnProcess,
   spawnForeground: spawnSync,
+  useSystemdScope: detectSystemdScopeSupport,
+  enableSystemdLinger,
 };
 
 const startupReady = (): DetachedStartupResult => ({ exitedEarly: false });
@@ -589,9 +638,16 @@ export async function startLocalDaemonDetached(
 
   const paseoHome = runtime.resolveHome(childEnv);
   const logPath = path.join(paseoHome, DAEMON_LOG_FILENAME);
+  const daemonArgs = [...process.execArgv, daemonRunnerEntry, ...buildRunnerArgs(options)];
+  const useSystemdScope = runtime.useSystemdScope();
+  if (useSystemdScope) {
+    runtime.enableSystemdLinger();
+  }
   const child = runtime.spawnDetached(
-    process.execPath,
-    [...process.execArgv, daemonRunnerEntry, ...buildRunnerArgs(options)],
+    useSystemdScope ? "systemd-run" : process.execPath,
+    useSystemdScope
+      ? ["--user", "--scope", "--quiet", process.execPath, ...daemonArgs]
+      : daemonArgs,
     {
       detached: true,
       envMode: "internal",

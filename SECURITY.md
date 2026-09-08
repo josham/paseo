@@ -80,6 +80,34 @@ Native builds narrow this gap rather than closing it outright. The WebView refus
 
 If you don't trust a page, read it in `Source`, which executes nothing. Source is available as an editable view on supported web hosts and a read-only view everywhere else.
 
+## SSH remote hosts
+
+The CLI and desktop app can reach a daemon on another machine over SSH (see
+[docs/ssh.md](docs/ssh.md)). SSH provides the authentication and transport
+encryption; Paseo adds nothing of its own to that connection. The remote daemon
+binds `127.0.0.1`, so the tunnel is the only way in.
+
+Three properties worth stating explicitly:
+
+**Connecting never installs anything.** Tunnelling to a host only forwards a
+port. Installing Paseo and launching a daemon there is a separate opt-in —
+`install=1` on the host URI, or the checkbox in Add host — recorded on the
+connection so it is never inferred. When it does run, Paseo installs only
+inside its own `installDir` and will use a `paseo` the host already provides in
+preference to installing a second one.
+
+**Host keys are confirmed, never auto-accepted.** Paseo does not set
+`StrictHostKeyChecking`, so OpenSSH's own policy applies. Without an askpass
+program an unknown host key fails the connection; with one, the fingerprint is
+shown in Paseo's UI for the user to confirm. Paseo never answers that question
+on the user's behalf.
+
+**Secrets are relayed, not stored.** The askpass channel lives in a private
+`mkdtemp` directory (mode 0700) for the life of one connection attempt and is
+removed afterwards. An answer is held in memory only long enough to be replayed
+to the second `ssh` process of the same attempt, so the user is asked once
+rather than twice; nothing is written to disk and nothing survives the attempt.
+
 ## Agent authentication
 
 Paseo wraps agent CLIs (Claude Code, Codex, OpenCode) but does not manage their authentication. Each agent provider handles its own credentials. Paseo never stores or transmits provider API keys. Agents run in your user context with your existing credentials.

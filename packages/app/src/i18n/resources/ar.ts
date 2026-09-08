@@ -1654,6 +1654,20 @@ export const ar: TranslationResources = {
         invalidTarget: "أدخل مضيف ssh:// صالحًا",
         failedToConnect: "تعذر الاتصال عبر SSH. {{detail}}",
       },
+      install: {
+        label: "تثبيت Paseo وتشغيله على هذا المضيف",
+        helper: "يثبّت Paseo نفسه في ‎~/.paseo على المضيف البعيد ويشغّل الخدمة هناك.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "كلمة مرور SSH",
+        confirm: "التحقق من مفتاح مضيف SSH",
+        passphrase: "عبارة مرور مفتاح SSH",
+        secret: "السر",
+        cancel: "إلغاء",
+        submit: "اتصال",
+      },
     },
     link: {
       title: "الصق رابط الاقتران",
@@ -2310,6 +2324,12 @@ export const ar: TranslationResources = {
         relay: "تتابع",
         local: "محلي",
         remoteSsh: "SSH عن بُعد",
+      },
+      ssh: {
+        authRequired:
+          "يحتاج {{host}} إلى كلمة مرور أو تأكيد مفتاح المضيف. لا يسأل Paseo إلا عند الاتصال، لذلك لن يقاطعك في الخلفية.",
+        connect: "اتصال",
+        connecting: "جارٍ الاتصال…",
       },
       connections: {
         title: "اتصالات",
