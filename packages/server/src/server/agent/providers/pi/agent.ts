@@ -46,6 +46,7 @@ import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
 import { runProviderTurn } from "../provider-runner.js";
 import {
   checkProviderLaunchAvailable,
+  isCommandAvailableInContainer,
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
   type ResolvedProviderLaunch,
@@ -2774,8 +2775,11 @@ export class PiRpcAgentClient implements AgentClient {
       if (strategy?.isIsolated) {
         // The host's copy is irrelevant: this session would run in the
         // container, where Pi has to be installed and on the PATH.
-        await strategy.resolveExecutable(launch.command);
-        return true;
+        return await isCommandAvailableInContainer({
+          strategy,
+          command: launch.command,
+          logger: this.logger,
+        });
       }
       const availability = await checkProviderLaunchAvailable(launch);
       return availability.available;
