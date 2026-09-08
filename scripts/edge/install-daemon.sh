@@ -113,9 +113,29 @@ echo "  launcher: $LAUNCHER"
 if (( restart )); then
     echo "Restarting paseo-daemon (this stops any agent running on it)…"
     systemctl --user restart paseo-daemon
-else
-    echo
-    echo "Point the service at it and restart when no agent is mid-run:"
-    echo "  ExecStart=$LAUNCHER daemon start --foreground"
-    echo "  systemctl --user restart paseo-daemon"
+    exit 0
 fi
+
+# Whether a restart is outstanding is derivable without touching the unit: the
+# daemon is running last install's build if it started before this marker was
+# written. Deliberately only reported -- restarting here would kill whatever
+# agents the daemon is hosting, possibly mid-run.
+started="$(systemctl --user show -p ExecMainStartTimestamp --value paseo-daemon 2>/dev/null || true)"
+pending=0
+if [[ -n "$started" ]] && started_at="$(date -d "$started" +%s 2>/dev/null)"; then
+    (( started_at < $(stat -c %Y "$PREFIX/EDGE_TAG") )) && pending=1
+fi
+
+echo
+if (( pending )); then
+    echo "The running daemon predates this install. Restart it when no agent is mid-run:"
+    echo "  systemctl --user restart paseo-daemon"
+    # Best effort: there may be no session bus behind a path-unit trigger.
+    command -v notify-send >/dev/null 2>&1 &&
+        notify-send "Paseo Edge" "Daemon $tag installed. Restart paseo-daemon when idle." 2>/dev/null || true
+else
+    echo "Nothing else to do; paseo-daemon is not running an older build."
+fi
+echo
+echo "The service needs no edit: it already runs"
+echo "  $LAUNCHER daemon start --foreground"
