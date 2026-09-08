@@ -230,10 +230,14 @@ jobs:
           # A bundle missing either of these still installs and still starts, and the
           # loss only shows up later as a browser client that cannot load or a daemon
           # that will not launch. Fail the build instead.
+          # Listed to a file rather than piped: `grep -q` exits at the first match,
+          # tar then dies on SIGPIPE, and under `set -o pipefail` that failure is the
+          # pipeline's status even though the entry was found.
           server_pack="$(find "$pack_dir" -name 'getpaseo-server-*.tgz' -print -quit)"
-          tar tzf "$server_pack" | grep -q 'package/dist/server/web-ui/' \
+          tar tzf "$server_pack" > "$RUNNER_TEMP/server-pack.list"
+          grep -q 'package/dist/server/web-ui/' "$RUNNER_TEMP/server-pack.list" \
             || { echo "::error::daemon bundle has no web UI"; exit 1; }
-          tar tzf "$server_pack" | grep -q 'package/dist/scripts/supervisor-entrypoint.js' \
+          grep -q 'package/dist/scripts/supervisor-entrypoint.js' "$RUNNER_TEMP/server-pack.list" \
             || { echo "::error::daemon bundle has no supervisor entrypoint"; exit 1; }
 
           # The tarballs keep upstream's version, deliberately: Settings -> About
