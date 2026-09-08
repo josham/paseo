@@ -159,6 +159,58 @@ Edge starts with no pairing, workspace or appearance state: those live in the
 profile's `Local Storage` and `IndexedDB`, and copying them out from under a running
 stock Paseo would risk corrupting live LevelDB stores.
 
+## Running the daemon
+
+Edge carries only the **client** half of each branch. Every server-side call goes to
+whatever daemon you are connected to, so a feature whose work happens in the daemon is
+invisible — with no error — unless that daemon is an Edge build too. A silently missing
+UI control is the signature: check `~/.paseo/daemon.log` for `WS inbound message
+validation failed` before suspecting the app.
+
+Each release therefore carries `paseo-edge-daemon-<version>.tar.gz` beside the
+AppImage: the seven Paseo packages, packed from the same commit. Install it with
+
+```bash
+scripts/edge/install-daemon.sh              # newest release
+scripts/edge/install-daemon.sh edge-v1.4.0  # a specific one
+```
+
+It installs into `~/.local/share/paseo-edge-daemon` and writes
+`~/.local/bin/paseo-edge-daemon`, so a service unit running
+`paseo-edge-daemon daemon start --foreground` picks up the new build on its next
+restart with no unit edit. The daemon runs as plain Node — no Electron, no browser
+process. It needs `node` and `npm` on the machine, and the install pulls third-party
+dependencies from the registry, so it is a small artifact plus a network install rather
+than a self-contained drop-in.
+
+The bundle is npm tarballs rather than a checkout because `npm pack` is the only thing
+that runs each package's `prepack`, and `@getpaseo/server`'s prepack is what builds
+`dist/` and the daemon web UI. Installing the repo from git would skip it: npm runs
+`prepare` for git dependencies, which none of these packages define, and npm cannot
+address a subdirectory of a monorepo.
+
+### Keeping the two halves together
+
+The app updates itself and the daemon does not follow. `autoDownload` is on and there is
+no setting to turn updates off, so the AppImage is replaced whenever a release lands
+while the installed daemon stays where it was. Nothing catches that drift on its own:
+both halves report *upstream's* version, so the app's version-mismatch check sees a
+match between an old daemon and a new client.
+
+```bash
+scripts/edge/install-sync.sh --enable
+```
+
+That installs a path unit on the AppImage which reinstalls the matching daemon bundle
+whenever the app updates itself. It does not restart the daemon — it fires on a file
+event with no idea whether an agent is mid-run, and a restart stops every agent the
+daemon is hosting. It tells you a restart is outstanding instead; run it when you are
+idle:
+
+```bash
+systemctl --user restart paseo-daemon
+```
+
 ## Versions
 
 Edge has its own version line starting at `1.0.0`, unrelated to upstream's numbers.

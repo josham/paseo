@@ -14,7 +14,6 @@ feat/configurable-content-width  # Content width as an Appearance setting (upstr
 fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (upstream PR #3655)
 fix/app-update-preserves-external-daemon  # App updates leave an externally managed daemon running (upstream PR #4429)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
-edge/daemon-only-service  # --daemon-only runs the app as a headless daemon service (fork-only; upstream PR #4519 withdrawn over Chromium overhead)
 pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (upstream PR #3723, mvanhorn)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (upstream PR #2597, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (upstream PR #2452, bendavid)
