@@ -1,0 +1,21 @@
+# Branches merged into edge/main by scripts/edge/rebuild.sh, in the order listed.
+#
+# One branch name per line, resolved against `origin` (github.com/josham/paseo).
+# Blank lines and # comments are ignored.
+#
+# Delete a line once its PR lands upstream: the next rebuild drops the branch, and
+# the change arrives through upstream/main instead. rebuild.sh warns and skips if a
+# listed branch is already contained in upstream/main, so a stale line is loud rather
+# than silently re-applying work upstream may have since changed.
+#
+# edge/tooling is always merged first and does not belong in this list.
+
+feat/configurable-content-width  # Content width as an Appearance setting (upstream PR #3652)
+fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (upstream PR #3655)
+fix/app-update-preserves-external-daemon  # App updates leave an externally managed daemon running (upstream PR #4429)
+edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
+pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (upstream PR #3723, mvanhorn)
+pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (upstream PR #2597, bendavid)
+pr/2452-pdf-preview  # Preview PDFs in the file panel (upstream PR #2452, bendavid)
+pr/2396-ssh-lifecycle  # Install, launch and authenticate SSH remote hosts (upstream PR #2396, bendavid)
+pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstream PR #2453, bendavid)
