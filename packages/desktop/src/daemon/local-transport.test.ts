@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isSshAuthRequiredMessage,
+  stripSshAuthRequiredPrefix,
+} from "@getpaseo/protocol/ssh-transport";
+import {
   buildSshArgs,
+  resolveTransportSetupTimeoutMs,
   createLocalTransportManager,
   LOCAL_TRANSPORT_SETUP_TIMEOUT_MS,
   parseTransportTarget,
@@ -101,6 +106,53 @@ describe("Remote SSH desktop transport", () => {
     ]);
   });
 
+  it("prompts instead of failing fast when an askpass program can answer", () => {
+    const args = buildSshArgs(
+      { transportType: "ssh", host: "build-box" },
+      "/tmp/paseo-askpass/askpass.sh",
+    );
+    expect(args).not.toContain("BatchMode=yes");
+  });
+
+  it("carries the remote setup options across the IPC boundary", () => {
+    expect(
+      parseTransportTarget({
+        transportType: "ssh",
+        host: "build-box",
+        remoteDaemon: { remoteHome: " /srv/paseo ", version: "0.7.2" },
+      }),
+    ).toEqual({
+      transportType: "ssh",
+      host: "build-box",
+      remoteDaemon: { remoteHome: "/srv/paseo", version: "0.7.2" },
+    });
+  });
+
+  it("leaves the remote host untouched when no setup was asked for", () => {
+    expect(parseTransportTarget({ transportType: "ssh", host: "build-box" })).toEqual({
+      transportType: "ssh",
+      host: "build-box",
+    });
+  });
+
+  it("gives an SSH session room for a password prompt the user has to answer", () => {
+    // The local budget assumes a socket that is either there or not; cutting
+    // an SSH session off at 30s would cancel it under an open dialog.
+    expect(
+      resolveTransportSetupTimeoutMs({ transportType: "socket", transportPath: "/tmp/paseo.sock" }),
+    ).toBe(LOCAL_TRANSPORT_SETUP_TIMEOUT_MS);
+    expect(resolveTransportSetupTimeoutMs({ transportType: "ssh", host: "build-box" })).toBe(
+      150_000,
+    );
+    expect(
+      resolveTransportSetupTimeoutMs({
+        transportType: "ssh",
+        host: "build-box",
+        remoteDaemon: {},
+      }),
+    ).toBe(330_000);
+  });
+
   it("rejects unsafe SSH targets at the IPC boundary", () => {
     expect(() =>
       parseTransportTarget({ transportType: "ssh", host: "-oProxyCommand=bad" }),
@@ -114,10 +166,16 @@ describe("Remote SSH desktop transport", () => {
   });
 
   it("surfaces SSH stderr before the child exit event settles", () => {
-    expect(resolveSshFailureDetail(null, "Permission denied.\n")).toBe("Permission denied.");
+    expect(resolveSshFailureDetail(null, "Connection refused\n")).toBe("Connection refused");
     expect(resolveSshFailureDetail("ssh exited with code 255", "earlier stderr")).toBe(
       "ssh exited with code 255",
     );
+  });
+
+  it("tags a missing credential so the app can offer to connect", () => {
+    const detail = resolveSshFailureDetail(null, "testuser@build-box: Permission denied.\n");
+    expect(isSshAuthRequiredMessage(detail)).toBe(true);
+    expect(stripSshAuthRequiredPrefix(detail ?? "")).toBe("testuser@build-box: Permission denied.");
   });
 });
 
@@ -136,7 +194,9 @@ describe("local transport session lifecycle", () => {
     manager.open(SESSION_INPUT);
     await Promise.resolve();
 
-    expect(scheduledTimeouts[0]?.delayMs).toBe(LOCAL_TRANSPORT_SETUP_TIMEOUT_MS);
+    expect(scheduledTimeouts[0]?.delayMs).toBe(
+      resolveTransportSetupTimeoutMs(SESSION_INPUT.target),
+    );
     scheduledTimeouts[0]?.callback();
 
     expect(firstSocket.terminate).toHaveBeenCalledTimes(1);

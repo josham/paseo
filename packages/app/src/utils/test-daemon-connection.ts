@@ -6,6 +6,7 @@ import {
 } from "@getpaseo/client/internal/daemon-client";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
 import type { HostConnection } from "@/types/host-connection";
+import { sshConnectTimeoutMs } from "@getpaseo/protocol/ssh-transport";
 import { getOrCreateClientId } from "./client-id";
 import { resolveAppVersion } from "./app-version";
 import {
@@ -62,6 +63,7 @@ function buildRemoteSshClientConfig(input: {
       ...(input.connection.daemonPort !== undefined
         ? { daemonPort: input.connection.daemonPort }
         : {}),
+      ...(input.connection.remoteDaemon ? { remoteDaemon: input.connection.remoteDaemon } : {}),
     }),
   };
 }
@@ -287,7 +289,7 @@ interface ProbeOptions {
 function resolveTimeout(connection: HostConnection, options?: ProbeOptions): number {
   if (options?.timeoutMs) return options.timeoutMs;
   if (connection.type === "relay") return 10_000;
-  if (connection.type === "remoteSsh") return 15_000;
+  if (connection.type === "remoteSsh") return sshConnectTimeoutMs(connection);
   return 6_000;
 }
 
