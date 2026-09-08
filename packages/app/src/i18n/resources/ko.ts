@@ -696,6 +696,34 @@ export const ko: TranslationResources = {
         copyBranchName: "브랜치 이름 복사",
         showSetup: "설정 표시",
       },
+      container: {
+        running: "컨테이너에서 실행 중",
+        runningTooltip: "에이전트와 터미널이 이 워크스페이스의 컨테이너 안에서 실행됩니다",
+        starting: "컨테이너 시작 중",
+        startingTooltip:
+          "컨테이너 환경을 빌드하고 시작하는 중입니다. 준비될 때까지 에이전트와 터미널이 대기합니다.",
+        stopped: "컨테이너 중지됨",
+        stoppedTooltip: "컨테이너 환경이 더 이상 실행되고 있지 않습니다",
+        details: {
+          backend: "백엔드",
+          image: "이미지",
+          container: "컨테이너",
+          user: "사용자",
+          started: "시작 시각",
+        },
+        configChangedTitle: "컨테이너 설정이 변경됨",
+        configChangedMessage:
+          "컨테이너를 빌드한 이후 devcontainer.json이 변경되었습니다. 변경 사항을 적용하려면 다시 빌드하세요.",
+        dismiss: "닫기",
+        rebuildAction: "컨테이너 다시 빌드",
+        restartAction: "컨테이너 다시 시작",
+        rebuildConfirmTitle: "컨테이너 다시 빌드",
+        rebuildConfirmMessage:
+          "실행 중인 모든 에이전트와 터미널이 중지됩니다. 컨테이너를 처음부터 다시 빌드할까요?",
+        restartConfirmTitle: "컨테이너 다시 시작",
+        restartConfirmMessage:
+          "실행 중인 모든 에이전트와 터미널이 다시 시작됩니다. 컨테이너를 다시 시작할까요?",
+      },
       toasts: {
         workspacePathUnavailable: "워크스페이스 경로를 아직 사용할 수 없습니다",
         branchNameUnavailable: "브랜치 이름을 사용할 수 없습니다",
@@ -1228,6 +1256,7 @@ export const ko: TranslationResources = {
       label: "격리",
     },
     fields: {
+      host: "호스트",
       project: "프로젝트",
       base: "기준",
       baseNotApplicable: "해당 없음",
@@ -1516,6 +1545,13 @@ export const ko: TranslationResources = {
       hostDisconnected: "호스트가 연결되어 있지 않습니다",
       pendingRequired: "대기 중인 워크스페이스 설정이 없습니다",
       composerStateRequired: "워크스페이스 설정 작성기 상태가 필요합니다",
+    },
+    containerBackend: {
+      label: "실행 환경",
+      host: "호스트",
+      devcontainer: "개발 컨테이너",
+      probing: "{{backend}} — 시작하는 중…",
+      probeFailed: "컨테이너를 확인할 수 없습니다: {{error}}",
     },
   },
   onboarding: {
