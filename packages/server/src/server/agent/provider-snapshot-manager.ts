@@ -811,7 +811,13 @@ export class ProviderSnapshotManager {
     if (entry.status === "error") {
       throw new Error(entry.error ?? `Failed to load provider '${entry.provider}'`);
     }
-    throw new Error(`Provider '${entry.provider}' is not available`);
+    // `unavailable` entries that know why they are unavailable say so here.
+    // The ones that do not are the reason the paths above log.
+    throw new Error(
+      entry.error
+        ? `Provider '${entry.provider}' is not available: ${entry.error}`
+        : `Provider '${entry.provider}' is not available`,
+    );
   }
 
   private requireProvider(provider: AgentProvider): ProviderDefinition {
@@ -984,6 +990,10 @@ export class ProviderSnapshotManager {
           status: "unavailable",
           error: toErrorMessage(error),
         });
+        this.logger.info(
+          { err: error, provider, cwd: catalogOptions.cwd },
+          "Could not resolve where this workspace runs, so its providers are unavailable",
+        );
         this.publishTargets([snapshotCwd]);
         return;
       }
@@ -1106,7 +1116,18 @@ export class ProviderSnapshotManager {
         },
       });
       if (!catalog) {
-        setEntry({ ...base, status: "unavailable", enabled: true });
+        const emitted = setEntry({ ...base, status: "unavailable", enabled: true });
+        if (emitted) {
+          // The client answered a bare `false`, so this is all anyone will ever
+          // know about why. Whatever it saw, it logged on the way out; this is
+          // the record of which question it was answering — the host's binary
+          // or the workspace container's, which are entirely different claims
+          // and reach the user as the same sentence.
+          this.logger.info(
+            { provider, ...describeCatalogTarget(catalogOptions) },
+            "Provider reported itself unavailable",
+          );
+        }
         return;
       }
 
@@ -1131,6 +1152,10 @@ export class ProviderSnapshotManager {
           enabled: true,
           error: toErrorMessage(error),
         });
+        this.logger.debug(
+          { err: error, provider, ...describeCatalogTarget(catalogOptions) },
+          "Container is not running, so the provider's tools are unknown",
+        );
         return;
       }
       const emitted = setEntry({
@@ -1262,6 +1287,24 @@ function createFetchCatalogOptions(
 
 export function isGlobalProviderSnapshotKey(cwd: string): boolean {
   return cwd === GLOBAL_PROVIDER_SNAPSHOT_KEY;
+}
+
+type CatalogTargetLog =
+  | { scope: "global" }
+  | { scope: "workspace"; cwd: string; isolated: boolean };
+
+/**
+ * Which question a probe was answering, for the log. `isolated` is the one that
+ * matters: a workspace whose tools live in a container gets a different answer
+ * from the host, and `provider diagnostic` only ever asks the host.
+ */
+function describeCatalogTarget(options: FetchCatalogOptions): CatalogTargetLog {
+  if (options.scope !== "workspace") return { scope: options.scope };
+  return {
+    scope: options.scope,
+    cwd: options.cwd,
+    isolated: options.launchStrategy?.isIsolated === true,
+  };
 }
 
 function identifyEntry(entry: ProviderSnapshotEntry): ProviderSnapshotRecord {

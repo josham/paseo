@@ -64,6 +64,7 @@ import {
 } from "./codex/tool-call-mapper.js";
 import {
   checkProviderLaunchAvailable,
+  isCommandAvailableInContainer,
   createProviderEnv,
   createProviderEnvSpec,
   resolveProviderLaunch,
@@ -7252,10 +7253,11 @@ export class CodexAppServerAgentClient implements AgentClient {
     const strategy = options?.launchStrategy;
     if (strategy?.isIsolated) {
       // The host's copy is irrelevant: this session would run in the container.
-      return strategy
-        .resolveExecutable(launch.command)
-        .then(() => true)
-        .catch(() => false);
+      return isCommandAvailableInContainer({
+        strategy,
+        command: launch.command,
+        logger: this.logger,
+      });
     }
     const availability = await checkCodexLaunchAvailable(launch);
     return availability.available;

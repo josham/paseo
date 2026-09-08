@@ -23,7 +23,23 @@ import {
 } from "./provider-snapshot-manager.js";
 import { OpenCodeAgentClient } from "./providers/opencode-agent.js";
 import { ContainerNotRunningError } from "../devcontainer/launch-strategy-registry.js";
-import { LocalLaunchStrategy } from "../devcontainer/launch-strategy.js";
+import {
+  ContainerExecLaunchStrategy,
+  LocalLaunchStrategy,
+} from "../devcontainer/launch-strategy.js";
+
+/** Enough of a container to be isolated; nothing here ever execs. */
+const CONTAINER_EXEC_SPEC = {
+  command: "docker",
+  leadingArgs: ["exec"],
+  optionArgs: ["-i"],
+  targetArgs: ["container-1"],
+  workdirFlag: "-w",
+  envFlag: "-e",
+  ttyArgs: ["-t"],
+  hostWorkspaceFolder: "/repo/app",
+  remoteWorkspaceFolder: "/workspaces/app",
+};
 
 const TEST_CAPABILITIES = {
   supportsStreaming: false,
@@ -276,6 +292,69 @@ describe("ProviderSnapshotManager public surface", () => {
         .records.find(({ entry: e }) => e.provider === "claude")?.entry;
       expect(entry?.status).toBe("unavailable");
       expect(entry?.error).toContain("container is not running");
+    } finally {
+      manager.destroy();
+    }
+  });
+
+  test("the reason a provider is unavailable reaches the caller", async () => {
+    // Every failure in the container chain — a stopped container, a binary the
+    // image does not have, a workspace `docker exec -w` cannot enter — used to
+    // arrive as the bare sentence "Provider 'claude' is not available", so the
+    // four of them were indistinguishable.
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      resolveLaunchStrategy: async () => {
+        throw new ContainerNotRunningError("ws-1");
+      },
+    });
+    try {
+      await expect(
+        manager.listModels({ cwd: "/repo/app", provider: "claude", wait: true }),
+      ).rejects.toThrow(/is not available: .*container is not running/i);
+    } finally {
+      manager.destroy();
+    }
+  });
+
+  test("a provider that answers a bare no leaves the question in the log", async () => {
+    // The client returns false and keeps its reasons; what has to survive is
+    // which copy of the tool was asked about. `provider diagnostic` answers for
+    // the host and reports Ready while every container probe is failing, so
+    // "unavailable" with nothing logged sent the reader to the wrong machine.
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(
+      { level: "info" },
+      { write: (line: string) => void lines.push(JSON.parse(line)) },
+    );
+    const manager = new ProviderSnapshotManager({
+      logger,
+      providerOverrides: {
+        claude: { enabled: false },
+        copilot: { enabled: false },
+        opencode: { enabled: false },
+        pi: { enabled: false },
+      },
+      extraClients: { codex: createExtraClient("codex") },
+      resolveLaunchStrategy: async () => new ContainerExecLaunchStrategy(CONTAINER_EXEC_SPEC),
+    });
+    try {
+      const entry = await manager.getProvider({
+        cwd: "/repo/app",
+        provider: "codex",
+        wait: true,
+      });
+
+      expect(entry.status).toBe("unavailable");
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          provider: "codex",
+          scope: "workspace",
+          cwd: "/repo/app",
+          isolated: true,
+          msg: "Provider reported itself unavailable",
+        }),
+      );
     } finally {
       manager.destroy();
     }
