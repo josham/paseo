@@ -78,6 +78,10 @@ export interface WorkspaceHeaderWorkspaceActions {
   onCopyWorkspacePath: () => void;
   onCopyBranchName: () => void;
   onOpenSetupTab: () => void;
+  containerStatus?: "running" | "starting" | "stopped";
+  hasDevContainerConfig?: boolean;
+  onRestartContainer: () => void;
+  onRebuildContainer: () => void;
 }
 
 function WorkspaceHeaderWorkspaceActionItems({
@@ -85,6 +89,10 @@ function WorkspaceHeaderWorkspaceActionItems({
   showWorkspaceSetup,
   importAgentDisabled,
   copyPathDisabled,
+  containerStatus,
+  hasDevContainerConfig,
+  onRestartContainer,
+  onRebuildContainer,
   onOpenImportSheet,
   onCopyWorkspacePath,
   onCopyBranchName,
@@ -127,6 +135,25 @@ function WorkspaceHeaderWorkspaceActionItems({
             onSelect={onOpenSetupTab}
           >
             {t("workspace.header.actions.showSetup")}
+          </DropdownMenuItem>
+        </>
+      ) : null}
+      {hasDevContainerConfig && containerStatus === "running" ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            testID="workspace-header-container-restart"
+            leading={MENU_SETTINGS_ICON}
+            onSelect={onRestartContainer}
+          >
+            {t("workspace.header.container.restartAction")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            testID="workspace-header-container-rebuild"
+            leading={MENU_SETTINGS_ICON}
+            onSelect={onRebuildContainer}
+          >
+            {t("workspace.header.container.rebuildAction")}
           </DropdownMenuItem>
         </>
       ) : null}
