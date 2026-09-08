@@ -94,6 +94,59 @@ describe("desktop-daemon-transport", () => {
     });
   });
 
+  it("carries an opted-in remote setup to the desktop transport bridge", async () => {
+    const rpc = createFakeLocalDaemonTransportRpc();
+    const transportFactory = createDesktopDaemonTransportFactory(rpc);
+
+    const url = buildDesktopDaemonTransportUrl({
+      transportType: "ssh",
+      host: "build-box",
+      remoteDaemon: { remoteHome: "/srv/paseo", version: "0.7.2" },
+    });
+    transportFactory!({ url });
+    rpc.resolveListen(vi.fn());
+    await Promise.resolve();
+
+    expect(rpc.openCalls[0]?.target).toEqual({
+      transportType: "ssh",
+      host: "build-box",
+      remoteDaemon: { remoteHome: "/srv/paseo", version: "0.7.2" },
+    });
+  });
+
+  it("carries a bare opt-in, which is what the Add-host checkbox produces", async () => {
+    const rpc = createFakeLocalDaemonTransportRpc();
+    const transportFactory = createDesktopDaemonTransportFactory(rpc);
+
+    const url = buildDesktopDaemonTransportUrl({
+      transportType: "ssh",
+      host: "build-box",
+      remoteDaemon: {},
+    });
+    transportFactory!({ url });
+    rpc.resolveListen(vi.fn());
+    await Promise.resolve();
+
+    expect(rpc.openCalls[0]?.target).toEqual({
+      transportType: "ssh",
+      host: "build-box",
+      remoteDaemon: {},
+    });
+  });
+
+  it("leaves the remote host alone when setup was never asked for", async () => {
+    const rpc = createFakeLocalDaemonTransportRpc();
+    const transportFactory = createDesktopDaemonTransportFactory(rpc);
+
+    transportFactory!({
+      url: buildDesktopDaemonTransportUrl({ transportType: "ssh", host: "build-box" }),
+    });
+    rpc.resolveListen(vi.fn());
+    await Promise.resolve();
+
+    expect(rpc.openCalls[0]?.target).toEqual({ transportType: "ssh", host: "build-box" });
+  });
+
   it.each([0, 65536])("rejects an out-of-range Remote SSH port (%s)", (sshPort) => {
     const transportFactory = createDesktopDaemonTransportFactory(
       createFakeLocalDaemonTransportRpc(),

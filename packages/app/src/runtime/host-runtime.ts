@@ -49,6 +49,11 @@ import {
 import { getDesktopHost } from "@/desktop/host";
 import { readDesktopManagedLocalCredential } from "@/desktop/daemon/local-credential";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
+import {
+  isSshAuthRequiredMessage,
+  sshConnectTimeoutMs,
+  type SshRemoteDaemonOptions,
+} from "@getpaseo/protocol/ssh-transport";
 import { BROWSER_AUTOMATION_COMMAND_NAMES } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import {
   useSessionStore,
@@ -566,11 +571,15 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         return new DaemonClient({
           ...base,
           transportFactory: desktopTransportFactory,
+          // SSH may be waiting on a password dialog, or on the remote host
+          // being set up; the client's local default would give up first.
+          connectTimeoutMs: sshConnectTimeoutMs(connection),
           url: buildDesktopDaemonTransportUrl({
             transportType: "ssh",
             host: connection.host,
             ...(connection.sshPort !== undefined ? { sshPort: connection.sshPort } : {}),
             ...(connection.daemonPort !== undefined ? { daemonPort: connection.daemonPort } : {}),
+            ...(connection.remoteDaemon ? { remoteDaemon: connection.remoteDaemon } : {}),
           }),
         });
       }
@@ -894,6 +903,7 @@ export class HostRuntimeController {
     let remaining = connectionsToProbe.length;
     let probeAuthFailure: "password_required" | "incorrect_password" | null = null;
     let activationLock: Promise<void> | null = null;
+    let authRequiredReason: string | null = null;
 
     const publishProbeState = (): void => {
       if (!this.isCurrentProbeRequest(requestVersion)) {
@@ -943,14 +953,23 @@ export class HostRuntimeController {
             connectionId: nextConnectionId,
             expectedProbeVersion: requestVersion,
           });
-        } else if (probeAuthFailure) {
+          return;
+        }
+        if (probeAuthFailure) {
           const message = new DaemonAuthenticationError(probeAuthFailure).message;
           this.applyConnectionEvent({ type: "connect_failed", message });
           this.updateSnapshot({
             ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
             authFailureReason: probeAuthFailure,
           });
+          return;
         }
+        // Nothing to connect to, and one of the connections only failed for
+        // want of a credential. Without this the host sits in `booting`
+        // forever, showing "connecting" and no reason — and the user is never
+        // offered the prompt that would fix it, because Paseo will not raise
+        // one on its own. See `ssh-prompt-grants.ts` in the desktop package.
+        if (authRequiredReason) this.markStartupError(authRequiredReason);
         return;
       }
 
@@ -1094,6 +1113,12 @@ export class HostRuntimeController {
                 this.authRejectedConnectionIds.add(connection.id);
                 probeAuthFailure = authFailure;
               }
+              // A probe failure is normally not worth a reason — the host is
+              // simply not reachable and the UI says so. A missing SSH
+              // credential is the exception: it is the one failure the user can
+              // fix, and only by being asked. Keep it for `finalizeProbeCycle`.
+              const message = error instanceof Error ? error.message : String(error);
+              if (isSshAuthRequiredMessage(message)) authRequiredReason = message;
               probeByConnectionId.set(connection.id, {
                 status: "unavailable",
                 latencyMs: null,
@@ -1916,6 +1941,7 @@ export class HostRuntimeStore {
     host: string;
     sshPort?: number;
     daemonPort?: number;
+    remoteDaemon?: SshRemoteDaemonOptions;
     label?: string;
   }): Promise<{ profile: HostProfile; serverId: string; hostname: string | null }> {
     return this.probeAndUpsertConnection({
@@ -2549,6 +2575,14 @@ export class HostRuntimeStore {
     }
   }
 
+  /**
+   * Connect one host now, skipping whatever backoff it was sitting in. This is
+   * what a user pressing "Connect" on a host that needs a credential runs.
+   */
+  ensureConnected(serverId: string): void {
+    this.controllers.get(serverId)?.ensureConnected();
+  }
+
   setAppVisible(visible: boolean): void {
     // Keep normal reconnect backoff running while hidden, for as long as the OS
     // lets us execute. Foregrounding bypasses that backoff without closing healthy sockets.
@@ -2844,6 +2878,7 @@ export interface HostMutations {
     host: string;
     sshPort?: number;
     daemonPort?: number;
+    remoteDaemon?: SshRemoteDaemonOptions;
     label?: string;
   }) => Promise<{ profile: HostProfile; serverId: string; hostname: string | null }>;
   beginLinkPairing: () => LinkPairing;
