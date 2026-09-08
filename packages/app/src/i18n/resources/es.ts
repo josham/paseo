@@ -1698,6 +1698,20 @@ export const es: TranslationResources = {
         invalidTarget: "Introduce un host ssh:// válido",
         failedToConnect: "No se pudo conectar por SSH. {{detail}}",
       },
+      install: {
+        label: "Instalar e iniciar Paseo en este host",
+        helper: "Paseo se instala en ~/.paseo en el host remoto e inicia allí el daemon.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "Contraseña SSH",
+        confirm: "Verificar la clave del host SSH",
+        passphrase: "Frase de contraseña de la clave SSH",
+        secret: "Secreto",
+        cancel: "Cancelar",
+        submit: "Conectar",
+      },
     },
     link: {
       title: "Pegar enlace de emparejamiento",
@@ -2362,6 +2376,12 @@ export const es: TranslationResources = {
         relay: "Relé",
         local: "Local",
         remoteSsh: "SSH remoto",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} necesita una contraseña o que se confirme una clave de host. Paseo solo lo pide cuando te conectas, así que no te interrumpirá en segundo plano.",
+        connect: "Conectar",
+        connecting: "Conectando…",
       },
       connections: {
         title: "Conexiones",

@@ -1,6 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
-import { buildSshTunnelArgs, type SshTransportTarget } from "@getpaseo/protocol/ssh-transport";
+import {
+  buildSshTunnelArgs,
+  type SshConnectionOptions,
+  type SshProcessEnv,
+  type SshTransportTarget,
+} from "@getpaseo/protocol/ssh-transport";
 
 const SSH_STDERR_LIMIT = 8192;
 
@@ -25,7 +30,15 @@ export function resolveSshFailureDetail(failure: string | null, stderr: string):
   return failure ?? (stderr.trim() || null);
 }
 
-export function createSshTunnel(target: SshTransportTarget): Promise<SshTunnel> {
+export interface SshTunnelOptions extends SshConnectionOptions {
+  /** Environment for the `ssh` child; needed to point it at an askpass program. */
+  env?: SshProcessEnv;
+}
+
+export function createSshTunnel(
+  target: SshTransportTarget,
+  options?: SshTunnelOptions,
+): Promise<SshTunnel> {
   let server: Server | null = null;
   let socket: Socket | null = null;
   let child: ChildProcessWithoutNullStreams | null = null;
@@ -47,10 +60,18 @@ export function createSshTunnel(target: SshTransportTarget): Promise<SshTunnel> 
       server?.close();
       server = null;
 
-      child = spawn("ssh", buildSshTunnelArgs(target), {
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
+      child = spawn(
+        "ssh",
+        buildSshTunnelArgs(
+          target,
+          options?.askpassPath ? { askpassPath: options.askpassPath } : undefined,
+        ),
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+          ...(options?.env ? { env: options.env } : {}),
+        },
+      );
       child.stderr.on("data", (chunk: Buffer | string) => {
         stderr = `${stderr}${chunk.toString()}`.slice(-SSH_STDERR_LIMIT);
       });

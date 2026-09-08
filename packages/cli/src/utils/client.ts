@@ -11,13 +11,13 @@ import {
   parseConnectionOfferFromUrl,
   type ConnectionOffer,
 } from "@getpaseo/protocol/connection-offer";
-import { parseSshTransportUri } from "@getpaseo/protocol/ssh-transport";
+import { parseSshTransportUri, sshConnectTimeoutMs } from "@getpaseo/protocol/ssh-transport";
 import { DaemonClient, type WebSocketLike } from "@getpaseo/client/internal/daemon-client";
 import path from "node:path";
 import { WebSocket } from "ws";
 import { getOrCreateCliClientId } from "./client-id.js";
 import { resolveCliVersion } from "../version.js";
-import { createSshTunnel } from "../ssh/ssh-tunnel.js";
+import { openSshTunnel } from "../ssh/ssh-connect.js";
 
 export interface ConnectOptions {
   host?: string;
@@ -371,13 +371,16 @@ export async function connectToDaemon(options?: ConnectOptions): Promise<DaemonC
   const explicitHost = getExplicitDaemonHost(options?.host);
   if (explicitHost?.trim().startsWith("ssh://")) {
     const target = parseSshTransportUri(explicitHost.trim());
-    const tunnel = await createSshTunnel(target);
+    const tunnel = await openSshTunnel(target);
     const password = resolveDaemonPassword(explicitHost);
+    // `ssh` is not spawned until the first connection to the tunnel, so any
+    // password prompt happens inside this connect. The local default would
+    // expire while the prompt is still on screen.
     const result = await tryConnectHost(
       tunnel.endpoint,
       password,
       clientId,
-      timeout,
+      options?.timeout ?? sshConnectTimeoutMs(target),
       nodeWebSocketFactory,
     );
     if ("client" in result) return result.client;

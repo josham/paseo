@@ -1,6 +1,7 @@
 import { getDesktopHost, isElectronRuntime } from "@/desktop/host";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
 import type { AgentSkillSelection } from "@getpaseo/protocol/messages";
+import type { SshRemoteDaemonOptions } from "@getpaseo/protocol/ssh-transport";
 
 export type DesktopDaemonState = "starting" | "running" | "stopped" | "errored";
 export type DesktopDaemonStopReason =
@@ -65,6 +66,7 @@ export interface RemoteSshTransportTarget {
   host: string;
   sshPort?: number;
   daemonPort?: number;
+  remoteDaemon?: SshRemoteDaemonOptions;
 }
 
 export type DesktopDaemonTransportTarget = LocalTransportTarget | RemoteSshTransportTarget;
