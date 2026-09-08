@@ -1656,6 +1656,20 @@ export const ko: TranslationResources = {
         invalidTarget: "유효한 ssh:// 호스트를 입력하세요",
         failedToConnect: "SSH로 연결할 수 없습니다. {{detail}}",
       },
+      install: {
+        label: "이 호스트에 Paseo 설치 후 시작",
+        helper: "원격 호스트의 ~/.paseo에 Paseo를 설치하고 그곳에서 데몬을 시작합니다.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "SSH 비밀번호",
+        confirm: "SSH 호스트 키 확인",
+        passphrase: "SSH 키 암호문",
+        secret: "비밀 값",
+        cancel: "취소",
+        submit: "연결",
+      },
     },
     link: {
       title: "페어링 링크 붙여넣기",
@@ -2300,6 +2314,12 @@ export const ko: TranslationResources = {
         relay: "릴레이",
         local: "로컬",
         remoteSsh: "원격 SSH",
+      },
+      ssh: {
+        authRequired:
+          "{{host}}에 비밀번호 또는 호스트 키 확인이 필요합니다. Paseo는 연결할 때만 요청하므로 백그라운드에서 방해하지 않습니다.",
+        connect: "연결",
+        connecting: "연결 중…",
       },
       connections: {
         title: "연결",

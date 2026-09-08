@@ -1662,6 +1662,20 @@ export const ja: TranslationResources = {
         invalidTarget: "有効な ssh:// ホストを入力してください",
         failedToConnect: "SSH で接続できません。{{detail}}",
       },
+      install: {
+        label: "このホストに Paseo をインストールして起動する",
+        helper: "リモートホストの ~/.paseo に Paseo をインストールし、そこでデーモンを起動します。",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "SSH パスワード",
+        confirm: "SSH ホスト鍵を確認",
+        passphrase: "SSH 鍵のパスフレーズ",
+        secret: "シークレット",
+        cancel: "キャンセル",
+        submit: "接続",
+      },
     },
     link: {
       title: "ペアリングリンクを貼り付け",
@@ -2309,6 +2323,12 @@ export const ja: TranslationResources = {
         relay: "リレー",
         local: "ローカル",
         remoteSsh: "リモート SSH",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} にはパスワードまたはホストキーの確認が必要です。Paseo は接続するときだけ尋ねるため、バックグラウンドで中断することはありません。",
+        connect: "接続",
+        connecting: "接続中…",
       },
       connections: {
         title: "接続",

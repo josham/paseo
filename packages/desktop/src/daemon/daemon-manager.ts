@@ -28,6 +28,7 @@ import {
   sendLocalTransportMessage,
   closeLocalTransportSession,
 } from "./local-transport.js";
+import { grantSshInteractivePrompt, submitSshPassword } from "./ssh-askpass.js";
 import { createNodeEntrypointInvocation, resolveDaemonRunnerEntrypoint } from "./runtime-paths.js";
 import { runExternalCliJsonCommand, runExternalCliTextCommand } from "./cli/external.js";
 import {
@@ -546,6 +547,14 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
       await sendLocalTransportMessage(
         args as { sessionId: string; text?: string; binaryBase64?: string },
       );
+    },
+    submit_ssh_password: (args) => {
+      submitSshPassword(args);
+    },
+    // The renderer's way of saying "the user asked for this one". Without it a
+    // connection authenticates with keys or fails; see `./ssh-askpass.ts`.
+    grant_ssh_prompt: (args) => {
+      grantSshInteractivePrompt(args);
     },
     close_local_daemon_transport: (args) => {
       const sessionId =
