@@ -1231,6 +1231,12 @@ export const ru: TranslationResources = {
         archiveFailed: "Не удалось архивировать рабочее пространство",
       },
     },
+    tree: {
+      expandWorkspace: "Развернуть дерево рабочей области",
+      collapseWorkspace: "Свернуть дерево рабочей области",
+      expandAgent: "Развернуть {{label}}",
+      collapseAgent: "Свернуть {{label}}",
+    },
   },
   newWorkspace: {
     title: "Новое рабочее пространство",

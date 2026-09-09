@@ -1222,6 +1222,12 @@ export const ko: TranslationResources = {
         archiveFailed: "워크스페이스를 보관하지 못했습니다.",
       },
     },
+    tree: {
+      expandWorkspace: "워크스페이스 트리 펼치기",
+      collapseWorkspace: "워크스페이스 트리 접기",
+      expandAgent: "{{label}} 펼치기",
+      collapseAgent: "{{label}} 접기",
+    },
   },
   newWorkspace: {
     title: "새 워크스페이스",
