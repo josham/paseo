@@ -30,6 +30,33 @@ describe("paseo env contract", () => {
     "ESBUILD_BINARY_PATH",
   ] as const;
 
+  test("keeps inherited daemon credentials out of an external process env", () => {
+    const env = createExternalProcessEnv({
+      ...baseEnv,
+      PASEO_PASSWORD: "daemon-secret",
+      PASEO_HUB_API_KEY: "hub-secret",
+    });
+
+    expect(env.PASEO_PASSWORD).toBeUndefined();
+    expect(env.PASEO_HUB_API_KEY).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  test("keeps internal daemon child env untouched by the credential scrub", () => {
+    const env = createPaseoInternalEnv({ ...baseEnv, PASEO_PASSWORD: "daemon-secret" });
+
+    expect(env.PASEO_PASSWORD).toBe("daemon-secret");
+  });
+
+  test("lets an explicit overlay hand a credential to a child on purpose", () => {
+    const env = createExternalProcessEnv(
+      { ...baseEnv, PASEO_PASSWORD: "inherited" },
+      { PASEO_PASSWORD: "deliberate" },
+    );
+
+    expect(env.PASEO_PASSWORD).toBe("deliberate");
+  });
+
   test("builds internal daemon child env by preserving pass-through and control vars", () => {
     const env = createPaseoInternalEnv(baseEnv);
 
