@@ -42,6 +42,7 @@ import {
   type WorkspaceDescriptorPayload,
 } from "./messages.js";
 import type { LaunchStrategyRegistry } from "./devcontainer/launch-strategy-registry.js";
+import type { ProcessLaunchStrategy } from "./devcontainer/launch-strategy.js";
 import type { ContainerBackendRegistry } from "./devcontainer/container-backend-registry.js";
 import { ContainerProbeCoordinator } from "./devcontainer/container-probe-coordinator.js";
 import { hostGitSupportsRelativeWorktrees } from "./devcontainer/relative-worktrees.js";
@@ -1120,20 +1121,8 @@ export class Session {
       clientSupportsWrapReflow: (source) =>
         this.supportsForSource(CLIENT_CAPS.terminalReflowableSnapshot, source),
       getClientBufferedAmount: (source) => this.getTransportBufferedAmount(source),
-      resolveLaunchStrategy: async (_cwd, workspaceId) => {
-        if (!this.launchStrategyRegistry || !workspaceId) return null;
-        // A host workspace runs terminals on the host.
-        const workspace = await this.workspaceRegistry.get(workspaceId);
-        if (!workspace?.containerBackend) return null;
-        // awaitStrategy throws if the container fails to start. If it returns
-        // a non-isolated strategy, the container hasn't started yet — treat
-        // this as an error, not a fallback to host.
-        const strategy = await this.launchStrategyRegistry.awaitStrategy(workspaceId);
-        if (!strategy.isIsolated) {
-          throw new ContainerNotRunningError(workspaceId);
-        }
-        return strategy;
-      },
+      resolveLaunchStrategy: async (_cwd, workspaceId) =>
+        this.resolveWorkspaceLaunchStrategy(workspaceId),
     });
     this.agentDirectory = new AgentDirectory({
       manager: this.agentManager,
@@ -1236,6 +1225,8 @@ export class Session {
         else this.emit(message);
       },
       spawnWorkspaceScript,
+      resolveLaunchStrategy: async (_cwd, workspaceId) =>
+        this.resolveWorkspaceLaunchStrategy(workspaceId),
       assertAutomationAllowed: (workspaceId) =>
         assertWorkspaceAutomationAllowedForWorkspace(this.workspaceRegistry, workspaceId),
       globalServicePorts: loadPersistedConfig(this.paseoHome).worktrees?.servicePorts,
@@ -5124,6 +5115,28 @@ export class Session {
       legacyWorktreeName,
       firstAgentContext,
     );
+  }
+
+  /**
+   * Where a workspace's processes run. A container-backed workspace runs its
+   * terminals and scripts inside that container; returning null means the
+   * host, which is correct only for a host workspace.
+   */
+  private async resolveWorkspaceLaunchStrategy(
+    workspaceId: string | undefined,
+  ): Promise<ProcessLaunchStrategy | null> {
+    if (!this.launchStrategyRegistry || !workspaceId) return null;
+    // A host workspace runs terminals on the host.
+    const workspace = await this.workspaceRegistry.get(workspaceId);
+    if (!workspace?.containerBackend) return null;
+    // awaitStrategy throws if the container fails to start. If it returns
+    // a non-isolated strategy, the container hasn't started yet — treat
+    // this as an error, not a fallback to host.
+    const strategy = await this.launchStrategyRegistry.awaitStrategy(workspaceId);
+    if (!strategy.isIsolated) {
+      throw new ContainerNotRunningError(workspaceId);
+    }
+    return strategy;
   }
 
   private isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
