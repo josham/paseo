@@ -55,36 +55,10 @@ jobs:
           fi
           echo "EDGE_VERSION=$version" >> "$GITHUB_ENV"
 
-          # rebuild.sh layers each merge onto the first-parent chain, so the run of
-          # "edge: merge" commits at the tip is exactly our stack and what precedes it
-          # is the upstream commit this build is based on.
-          merges="$(git log --first-parent --format=%s HEAD | grep -c '^edge: merge ' || echo 0)"
-          base="$(git rev-parse --short "HEAD~${merges}")"
-
-          {
-            echo "Linux desktop build of Paseo Edge — a modified build of Paseo maintained at"
-            echo "[josham/paseo](https://github.com/josham/paseo). Not affiliated with or endorsed by getpaseo."
-            echo
-            echo "Based on upstream \`getpaseo/paseo@$base\`, plus:"
-            echo
-            # branches.txt is the manifest, so its trailing `# ...` comment is the one
-            # description of each branch. Reading it here keeps the notes from drifting.
-            git log --first-parent --format='%s' HEAD |
-              grep '^edge: merge ' |
-              sed 's/^edge: merge //' |
-              while read -r branch; do
-                # Split on the first # only: descriptions carry their own (PR #1234).
-                desc="$(awk -v b="$branch" '
-                  { i = index($0, "#")
-                    key = (i ? substr($0, 1, i - 1) : $0); gsub(/[ \t]/, "", key)
-                    if (key == b && i) { d = substr($0, i + 1); sub(/^[ \t]*/, "", d); print d; exit } }
-                ' scripts/edge/branches.txt)"
-                if [ -n "$desc" ]; then echo "- $desc — \`$branch\`"; else echo "- \`$branch\`"; fi
-              done
-            echo
-            echo "Installs alongside a stock Paseo (separate app id and desktop entry). The AppImage"
-            echo "self-updates from this repo's releases."
-          } > "$RUNNER_TEMP/notes.md"
+          # Shared with edge-android-release.yml: both jobs run off this tag and either
+          # may create the release, so both write the same notes.
+          scripts/edge/release-notes.sh "$EDGE_TAG" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
 
       - name: Setup Node
         uses: actions/setup-node@v4
