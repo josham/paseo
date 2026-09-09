@@ -24,11 +24,16 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 2
 fi
 
-# rebuild.sh layers each merge onto the first-parent chain, so the run of "edge: merge"
-# commits at the tip is exactly our stack and what precedes it is the upstream commit
-# this build is based on.
-merges="$(git log --first-parent --format=%s HEAD | grep -c '^edge: merge ' || echo 0)"
-base="$(git rev-parse --short "HEAD~${merges}")"
+# rebuild.sh layers each merge onto the first-parent chain, so the run of fork commits at
+# the tip is our stack and what precedes it is the upstream commit this build is based on.
+# Count every leading "edge: " subject, not only the merges: a tag cut by folding tooling
+# into edge/main by hand carries one more commit on top, and counting merges alone would
+# name one of our own merges as the upstream base.
+# Fed from a variable rather than a pipe: awk exits at the first upstream subject, git
+# then dies on SIGPIPE, and under `set -o pipefail` that failure would kill this script.
+subjects="$(git log --first-parent --format=%s HEAD)"
+ours="$(awk '/^edge: /{n++; next} {exit} END{print n+0}' <<<"$subjects")"
+base="$(git rev-parse --short "HEAD~${ours}")"
 
 echo "Linux desktop and Android builds of Paseo Edge — a modified build of Paseo maintained at"
 echo "[josham/paseo](https://github.com/josham/paseo). Not affiliated with or endorsed by getpaseo."
