@@ -25,6 +25,7 @@ fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped 
 fix/app-update-preserves-external-daemon  # App updates leave an externally managed daemon running (#4429, open)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
+fix/navigator-polyfill-before-routes  # navigator polyfill runs before route modules, so Android release builds start (no upstream PR yet)
 pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (#3723, open, mvanhorn)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (#2597, closed upstream, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (#2452, closed upstream, bendavid)
