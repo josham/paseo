@@ -132,6 +132,7 @@ import { createSpeechService } from "./speech/speech-runtime.js";
 import { createDevContainerBackend, createLaunchStrategyRegistry } from "./devcontainer/index.js";
 import { createContainerBackendRegistry } from "./devcontainer/container-backend-registry.js";
 import { ContainerNotRunningError } from "./devcontainer/launch-strategy-registry.js";
+import type { ProcessLaunchStrategy } from "./devcontainer/launch-strategy.js";
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
@@ -966,6 +967,37 @@ export async function createPaseoDaemon(
     const git = daemonConfigStore.get().git;
     if (git) configureGitProcessPolicy(git);
   });
+  /**
+   * Where a workspace's processes run: its container, or null for the host.
+   * Shared by agent launches, MCP-created terminals and workspace scripts —
+   * every path that spawns a process on a workspace's behalf must agree, or
+   * the container stops being a boundary.
+   */
+  const resolveWorkspaceLaunchStrategy = async (
+    cwd: string,
+    workspaceId?: string,
+  ): Promise<ProcessLaunchStrategy | null> => {
+    if (!launchStrategyRegistry) return null;
+    // Catalog/metadata ops call with cwd only — resolve workspaceId from cwd.
+    if (!workspaceId) {
+      const workspaces = await workspaceRegistry?.list();
+      workspaceId = workspaces
+        ? (resolveWorkspaceIdForPath(cwd, workspaces) ?? undefined)
+        : undefined;
+    }
+    if (!workspaceId) return null;
+    const workspace = await workspaceRegistry?.get(workspaceId);
+    if (!workspace?.containerBackend) return null; // null = host
+    // awaitStrategy throws if the container fails to start. If it returns
+    // a non-isolated strategy, the container hasn't started yet — treat
+    // this as an error, not a fallback to host.
+    const strategy = await launchStrategyRegistry.awaitStrategy(workspaceId);
+    if (!strategy.isIsolated) {
+      throw new ContainerNotRunningError(workspaceId);
+    }
+    return strategy;
+  };
+
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const agentManager = new AgentManager({
     pluginLifecycle: pluginRuntime,
@@ -980,27 +1012,7 @@ export async function createPaseoDaemon(
     resolvePaseoToolPolicy: (provider) =>
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     launchStrategyRegistry,
-    resolveLaunchStrategy: async (cwd, workspaceId) => {
-      if (!launchStrategyRegistry) return null;
-      // Catalog/metadata ops call with cwd only — resolve workspaceId from cwd.
-      if (!workspaceId) {
-        const workspaces = await workspaceRegistry?.list();
-        workspaceId = workspaces
-          ? (resolveWorkspaceIdForPath(cwd, workspaces) ?? undefined)
-          : undefined;
-      }
-      if (!workspaceId) return null;
-      const workspace = await workspaceRegistry?.get(workspaceId);
-      if (!workspace?.containerBackend) return null; // null = host
-      // awaitStrategy throws if the container fails to start. If it returns
-      // a non-isolated strategy, the container hasn't started yet — treat
-      // this as an error, not a fallback to host.
-      const strategy = await launchStrategyRegistry.awaitStrategy(workspaceId);
-      if (!strategy.isIsolated) {
-        throw new ContainerNotRunningError(workspaceId);
-      }
-      return strategy;
-    },
+    resolveLaunchStrategy: resolveWorkspaceLaunchStrategy,
     logger,
   });
   const syncPluginProviders = () => {
@@ -1472,6 +1484,7 @@ export async function createPaseoDaemon(
       // status updates fan out to every connected client.
       emit: (message) => wsServer?.broadcast(wrapSessionMessage(message)),
       spawnWorkspaceScript,
+      resolveLaunchStrategy: resolveWorkspaceLaunchStrategy,
       assertAutomationAllowed: (workspaceId) =>
         assertWorkspaceAutomationAllowedForWorkspace(workspaceRegistry, workspaceId),
       globalServicePorts: loadPersistedConfig(config.paseoHome).worktrees?.servicePorts,
@@ -1492,6 +1505,7 @@ export async function createPaseoDaemon(
     voiceOnly: runtime.voiceOnly,
     resolveSpeakHandler: (agentId) => wsServer?.resolveVoiceSpeakHandler(agentId) ?? null,
     resolveCallerContext: (agentId) => wsServer?.resolveVoiceCallerContext(agentId) ?? null,
+    resolveLaunchStrategy: resolveWorkspaceLaunchStrategy,
     logger,
   });
   const createAgentToolCatalog = (runtime: PaseoToolRuntimeContext) =>
