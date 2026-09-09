@@ -219,9 +219,17 @@ systemctl --user restart paseo-daemon
 
 ## Android
 
-Every `edge-v*` tag builds an APK as well, in the same release:
-`paseo-edge-<version>-android-arm64.apk`. Download it on the phone and open it — it is a
-sideload, so Android asks once for permission to install from that source.
+Every `edge-v*` tag builds an APK as well, in the same release. The name carries no version,
+so this link is always the newest build:
+
+```
+https://github.com/josham/paseo/releases/latest/download/paseo-edge-android-arm64.apk
+```
+
+Open it on the phone — it is a sideload, so Android asks once for permission to install from
+whatever browser you used. Nothing updates it afterwards: come back to that link, or point
+[Obtainium](https://github.com/ImranR98/Obtainium) at the repo and let it watch for releases.
+Every build is signed with the same key, so installs over the top keep app data.
 
 It installs **alongside** a stock Paseo rather than over it: the APK is `sh.paseo.edge`,
 labelled "Paseo Edge". Android refuses to install over an app signed by a different key

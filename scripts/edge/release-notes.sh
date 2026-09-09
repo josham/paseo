@@ -62,6 +62,9 @@ echo "and desktop entry) and updates itself from this repo's releases."
 echo "\`paseo-edge-daemon-$version.tar.gz\` is the daemon built from the same commit; install it"
 echo "with \`scripts/edge/install-daemon.sh\` or the branches' server halves are missing without an error."
 echo
-echo "**Android** — \`paseo-edge-$version-android-arm64.apk\` is a sideload for arm64 devices,"
-echo "signed with the Edge key. It installs alongside a stock Paseo (\`sh.paseo.edge\`) and does not"
-echo "update itself. It is a client only: pair it with an Edge daemon for the server-side branches."
+echo "**Android** — \`paseo-edge-android-arm64.apk\` is a sideload for arm64 devices, signed with"
+echo "the Edge key. It installs alongside a stock Paseo (\`sh.paseo.edge\`) and does not update"
+echo "itself; [releases/latest/download/paseo-edge-android-arm64.apk][apk] is always the newest"
+echo "one. It is a client only: pair it with an Edge daemon for the server-side branches."
+echo
+echo "[apk]: https://github.com/josham/paseo/releases/latest/download/paseo-edge-android-arm64.apk"
