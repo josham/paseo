@@ -121,6 +121,20 @@ exec env \\
 LAUNCHER
 chmod +x "$launcher"
 
+# StartupWMClass must be the Wayland app_id, which is "getpaseo-desktop" -- Electron's
+# default, derived from the package name @getpaseo/desktop. Nothing overrides it: no
+# app.setDesktopName() call, no desktop block in electron-builder.yml, and neither
+# app.setName() nor PASEO_TEST_APP_NAME above changes it. Without a match KWin resolves
+# no icon at all and Plasma falls back to breeze/apps/48/wayland.svg -- a gold "W".
+#
+# --class=paseo-edge does not help; it is X11-only and a window launched with it still
+# reports getpaseo-desktop (measured). Fixing this properly means app.setDesktopName()
+# in main.ts, which is a code change and belongs upstream.
+#
+# Stock Paseo reports the same app_id, so if both apps are installed this entry claims
+# both. That is the right trade here: upstream's own paseo-desktop.desktop ships
+# StartupWMClass=Paseo, which never matches on Wayland, so it shows the fallback either
+# way.
 cat > "$desktop_entry" <<ENTRY
 [Desktop Entry]
 Name=Paseo Edge
@@ -130,7 +144,7 @@ Icon=paseo-edge
 Terminal=false
 Type=Application
 Categories=Development;
-StartupWMClass=Paseo Edge
+StartupWMClass=getpaseo-desktop
 ENTRY
 
 echo "installed:"
