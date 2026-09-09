@@ -717,17 +717,27 @@ export class ProviderSnapshotManager {
   }
 
   private resolveParent(parent: ManagedAgent): AgentCreateConfigParent {
-    const definition = this.requireProvider(parent.provider);
     return {
       provider: parent.provider,
       modeId: parent.currentModeId,
-      isUnattended: definition.isCreateConfigUnattended({
-        modeId: parent.currentModeId,
-        config: parent.config,
-        features: parent.features,
-        availableModes: parent.availableModes ?? definition.modes ?? [],
-      }),
+      isUnattended: this.isUnattendedModeForAgent(parent, parent.currentModeId),
     };
+  }
+
+  /**
+   * Whether `modeId` would run this agent without permission prompts. The
+   * answer is the provider's to give: a mode is the usual signal, but some
+   * providers also derive it from feature values, so the agent's own config
+   * and features are part of the question.
+   */
+  isUnattendedModeForAgent(agent: ManagedAgent, modeId: string | null): boolean {
+    const definition = this.requireProvider(agent.provider);
+    return definition.isCreateConfigUnattended({
+      modeId,
+      config: agent.config,
+      features: agent.features,
+      availableModes: agent.availableModes ?? definition.modes ?? [],
+    });
   }
 
   private getSnapshotForTarget(
