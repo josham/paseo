@@ -95,15 +95,30 @@ jobs:
           distribution: "temurin"
           java-version: "21"
 
-      - name: Free up disk space
+      - name: Make room on the runner
         shell: bash
         run: |
           set -euo pipefail
-          # A release build wants room for node_modules, the Gradle caches, the NDK
-          # objects and the packaged APK at once. These two are the largest things on
-          # the image we cannot use, and deleting them takes seconds.
+          # Disk: a release build wants room for node_modules, the Gradle caches, the NDK
+          # objects and the packaged APK at once. These two are the largest things on the
+          # image we cannot use, and deleting them takes seconds.
           sudo rm -rf /usr/share/dotnet /opt/ghc
+
+          # Memory: this is what killed the first 1.6.0 run. Hermes compiles the bundle
+          # (~6000 modules) inside the same Gradle invocation as the native build, and the
+          # runner went away mid-task -- no error, just "The operation was canceled",
+          # which is what an OOM-killed runner agent looks like. The Gradle flags below
+          # are the other half of the fix; this widens the runner's 4G swapfile so a spike
+          # pages instead of taking the machine down.
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 12G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+
           df -h /
+          free -h
 
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
@@ -224,11 +239,17 @@ jobs:
           cd "$APP_PACKAGE_PATH/android"
           # The lint exclusions are the ones EAS's production-apk profile passes: a
           # release lint run costs minutes and fails on upstream's own warnings.
+          #
+          # Serial and daemon-free, which docs/android.md prescribes for source builds and
+          # the first 1.6.0 run proved the hard way: Gradle's own heap was sized correctly
+          # and the runner still died, because parallel workers plus Hermes plus the
+          # native build do not fit in one runner at the same time. EAS avoids this by
+          # buying a larger machine; we take the slower build instead.
           ./gradlew :app:assembleRelease \
             -PreactNativeArchitectures="$ANDROID_ABI" \
             -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease \
             -x generateReleaseLintModel -x generateReleaseLintVitalModel \
-            --no-daemon
+            --no-daemon --max-workers=1 -Dorg.gradle.parallel=false
 
       - name: Verify the APK's identity and signature
         id: apk

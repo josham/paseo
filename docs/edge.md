@@ -268,6 +268,12 @@ build instead of shipping something mislabelled.
 Only arm64 is built (`-PreactNativeArchitectures=arm64-v8a`), which is every Android device
 made since about 2017. A universal APK would carry three ABIs nobody here runs.
 
+Gradle runs serial and daemon-free there, for the reason [docs/android.md](android.md) gives
+under F-Droid builds: Hermes compiles the bundle in the same invocation as the native build,
+and in parallel that does not fit on a standard runner. The first attempt died with no error
+at all — `The operation was canceled` a minute after the bundle was written, which is what an
+OOM-killed runner agent looks like. EAS pays for a larger machine; we take the slower build.
+
 ### Push notifications
 
 The daemon does not talk to the phone directly. `packages/server/src/server/push/push-service.ts`
