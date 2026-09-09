@@ -10,6 +10,7 @@ import {
   DEFAULT_SSH_DAEMON_PORT,
   validatePort,
   validateSshHost,
+  type SshRemoteDaemonOptions,
 } from "@getpaseo/protocol/ssh-transport";
 import {
   type HostAppearance,
@@ -38,6 +39,12 @@ export interface RemoteSshHostConnection {
   host: string;
   sshPort?: number;
   daemonPort?: number;
+  /**
+   * Set only when the user asked Paseo to install and start the daemon on this
+   * host. Absent means the connection tunnels to whatever is already running
+   * and never touches the remote machine.
+   */
+  remoteDaemon?: SshRemoteDaemonOptions;
 }
 
 export interface RelayHostConnection {
@@ -158,7 +165,10 @@ function remoteSshConnectionEquals(
   return (
     left.host === right.host &&
     left.sshPort === right.sshPort &&
-    left.daemonPort === right.daemonPort
+    left.daemonPort === right.daemonPort &&
+    // Turning remote setup on or off is a real change to the connection even
+    // though it does not change the id, which is only about where to connect.
+    JSON.stringify(left.remoteDaemon ?? null) === JSON.stringify(right.remoteDaemon ?? null)
   );
 }
 
@@ -322,10 +332,25 @@ export function connectionFromListen(listen: string): HostConnection | null {
   }
 }
 
+function normalizeRemoteDaemonOptions(
+  input: SshRemoteDaemonOptions | undefined,
+): SshRemoteDaemonOptions | undefined {
+  if (!input) return undefined;
+  const remoteHome = input.remoteHome?.trim();
+  const installDir = input.installDir?.trim();
+  const version = input.version?.trim();
+  return {
+    ...(remoteHome ? { remoteHome } : {}),
+    ...(installDir ? { installDir } : {}),
+    ...(version ? { version } : {}),
+  };
+}
+
 export function createRemoteSshHostConnection(input: {
   host: string;
   sshPort?: number;
   daemonPort?: number;
+  remoteDaemon?: SshRemoteDaemonOptions;
 }): RemoteSshHostConnection {
   const host = validateSshHost(input.host);
   const sshPort = input.sshPort === undefined ? undefined : validatePort(input.sshPort, "SSH port");
@@ -342,12 +367,15 @@ export function createRemoteSshHostConnection(input: {
     daemonPort === undefined ? "" : String(daemonPort),
   ].join(":");
 
+  const remoteDaemon = normalizeRemoteDaemonOptions(input.remoteDaemon);
+
   return {
     id,
     type: "remoteSsh",
     host,
     ...(sshPort !== undefined ? { sshPort } : {}),
     ...(daemonPort !== undefined ? { daemonPort } : {}),
+    ...(remoteDaemon ? { remoteDaemon } : {}),
   };
 }
 
@@ -375,6 +403,13 @@ const StoredHostConnectionSchema = z.discriminatedUnion("type", [
     host: z.string(),
     sshPort: z.number().optional(),
     daemonPort: z.number().optional(),
+    remoteDaemon: z
+      .strictObject({
+        remoteHome: z.string().optional(),
+        installDir: z.string().optional(),
+        version: z.string().optional(),
+      })
+      .optional(),
   }),
   z.strictObject({
     id: z.string().optional(),
@@ -426,6 +461,7 @@ function normalizeStoredConnection(connection: StoredHostConnection): HostConnec
         host: connection.host,
         ...(connection.sshPort !== undefined ? { sshPort: connection.sshPort } : {}),
         ...(connection.daemonPort !== undefined ? { daemonPort: connection.daemonPort } : {}),
+        ...(connection.remoteDaemon ? { remoteDaemon: connection.remoteDaemon } : {}),
       });
     } catch {
       return null;

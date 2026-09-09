@@ -1673,6 +1673,21 @@ export const en = {
         invalidTarget: "Enter a valid ssh:// host",
         failedToConnect: "Unable to connect over SSH. {{detail}}",
       },
+      install: {
+        label: "Install and start Paseo on this host",
+        helper:
+          "Paseo installs itself under ~/.paseo on the remote host and starts the daemon there.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "SSH password",
+        confirm: "Verify SSH host key",
+        passphrase: "SSH key passphrase",
+        secret: "Secret",
+        cancel: "Cancel",
+        submit: "Connect",
+      },
     },
     link: {
       title: "Paste pairing link",
@@ -2425,6 +2440,12 @@ export const en = {
         relay: "Relay",
         local: "Local",
         remoteSsh: "Remote SSH",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} needs a password or a host key confirmed. Paseo only asks when you connect, so it will not interrupt you in the background.",
+        connect: "Connect",
+        connecting: "Connecting…",
       },
       connections: {
         title: "Connections",
