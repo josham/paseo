@@ -19,8 +19,8 @@ pr/2453-devcontainer  # Run agents and terminals inside a dev container (upstrea
 ```
 
 That file is the manifest `rebuild.sh` merges from, so it cannot drift from what shipped.
-`rebuild.sh` strips the comments when it parses; the release workflow reads them back to
-write the "plus:" list in each release's notes. Adding a branch means adding its line and
+`rebuild.sh` strips the comments when it parses; `scripts/edge/release-notes.sh` reads them
+back to write the "plus:" list in each release's notes. Adding a branch means adding its line and
 its one-line description — nothing else to update.
 
 For a specific build, the [release notes](https://github.com/josham/paseo/releases) name
@@ -39,7 +39,7 @@ git log --first-parent --format=%s edge-v1.1.0 | grep '^edge: merge '
 | `main`                    | A mirror of `upstream/main`. Never commit to it.                                                                       |
 | `feat/*`, `fix/*`, `bd/*` | Ordinary work, cut from `upstream/main`. These are the branches that become upstream PRs.                              |
 | `pr/<number>-<slug>`      | A re-land of someone else's upstream PR, named for it.                                                                 |
-| `edge/tooling`            | This doc, `scripts/edge/`, and `.github/workflows/edge-linux-release.yml`. The only branch the fork owns.              |
+| `edge/tooling`            | This doc, `scripts/edge/`, and the two `edge-*-release.yml` workflows. The only branch the fork owns.                  |
 | `edge/main`               | Generated. Force-pushed by `scripts/edge/rebuild.sh` on every run. Do not commit to it and do not open PRs against it. |
 
 `edge/main` is rebuilt from scratch rather than maintained, which is what makes retiring
@@ -200,7 +200,7 @@ address a subdirectory of a monorepo.
 The app updates itself and the daemon does not follow. `autoDownload` is on and there is
 no setting to turn updates off, so the AppImage is replaced whenever a release lands
 while the installed daemon stays where it was. Nothing catches that drift on its own:
-both halves report *upstream's* version, so the app's version-mismatch check sees a
+both halves report _upstream's_ version, so the app's version-mismatch check sees a
 match between an old daemon and a new client.
 
 ```bash
@@ -216,6 +216,126 @@ idle:
 ```bash
 systemctl --user restart paseo-daemon
 ```
+
+## Android
+
+Every `edge-v*` tag builds an APK as well, in the same release:
+`paseo-edge-<version>-android-arm64.apk`. Download it on the phone and open it — it is a
+sideload, so Android asks once for permission to install from that source.
+
+It installs **alongside** a stock Paseo rather than over it: the APK is `sh.paseo.edge`,
+labelled "Paseo Edge". Android refuses to install over an app signed by a different key
+anyway, so sharing upstream's id would mean uninstalling the stock app and losing its
+data. Two things follow from having both: they show up as separate apps with the same
+icon, and both claim the `paseo://` scheme, so a pairing link opens a chooser.
+
+Like the desktop build, Edge on Android is the **client** half only — pair it with an Edge
+daemon or the server-side branches are invisible. `pr/2597-sidebar-tree` is entirely
+client-side and only works here; `pr/2452-pdf-preview` needs both halves.
+
+Everything upstream's APK does is here, QR pairing included, as long as push notifications
+are configured — see below. Without that configuration the build still works and simply
+never receives a notification.
+
+`versionCode` and `versionName` stay upstream's, for the same reason "App version" does in
+Settings -> About. The Edge number is in the About screen's "Edge build" row and in the
+APK's filename. Reinstalling over the same `versionCode` is allowed, so a new Edge build of
+the same upstream version installs over the old one normally.
+
+### How it is built
+
+`.github/workflows/edge-android-release.yml` builds from source on the runner —
+`expo prebuild` then Gradle, the path [docs/android.md](android.md) documents for F-Droid.
+Upstream's `android-apk-release.yml` builds on EAS instead, which would mean an Expo
+account, an `EXPO_TOKEN` and build quota, publishing under getpaseo's project. Building on
+the runner needs none of that.
+
+`scripts/edge/android-identity.sh` gives the generated project the Edge identity. It is the
+Android counterpart of the `electron-builder -c` flags: it touches only `packages/app/android`,
+which prebuild regenerates and git ignores, so no upstream file changes. It appends a second
+`android { }` block rather than editing the generated one — the later block wins — and
+asserts upstream's id and app name are what it expects first, so a rename upstream fails the
+build instead of shipping something mislabelled.
+
+Only arm64 is built (`-PreactNativeArchitectures=arm64-v8a`), which is every Android device
+made since about 2017. A universal APK would carry three ABIs nobody here runs.
+
+### Push notifications
+
+The daemon does not talk to the phone directly. `packages/server/src/server/push/push-service.ts`
+POSTs to Expo's push service, which delivers over FCM. So an Edge build needs both halves of
+that chain to be ours, and upstream's APK gets them from credentials the fork does not have:
+
+| What                   | Where it comes from                                                                     | What it is for                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `google-services.json` | a Firebase project with an Android app registered as `sh.paseo.edge`                    | lets the app mint a device token at all                                              |
+| Expo `projectId`       | an Expo account with the Firebase service-account key uploaded as its FCM V1 credential | what `getExpoPushTokenAsync` mints against, and whose credentials Expo delivers with |
+
+Configure both or neither. With upstream's `projectId` and our Firebase file, the app returns
+a push token and every notification is dropped — nothing is logged at either end. The workflow
+enforces the pairing and skips push entirely when both are absent.
+
+One-time setup:
+
+1. Firebase console → new project → add an **Android** app with package name `sh.paseo.edge`
+   (no SHA-1 needed) → download `google-services.json`.
+2. Same project → Settings → Service accounts → **Generate new private key**. That JSON is
+   Expo's FCM credential, not something the build uses.
+3. expo.dev → new project → note its **Project ID** and the account name → Credentials →
+   Android, application identifier `sh.paseo.edge` → upload the key from step 2 as the
+   **FCM V1 service account key**.
+4. Hand them to the workflow:
+
+   ```bash
+   gh secret set EDGE_ANDROID_GOOGLE_SERVICES_JSON -R josham/paseo \
+     < <(base64 -w0 google-services.json)
+   gh variable set EDGE_EXPO_PROJECT_ID -R josham/paseo --body "<uuid>"
+   gh variable set EDGE_EXPO_OWNER -R josham/paseo --body "<expo-account>"
+   gh variable set EDGE_EXPO_SLUG -R josham/paseo --body "<expo-project-slug>"
+   ```
+
+`scripts/edge/android-push-config.sh` then writes the Firebase file where `app.config.js`
+already looks for it (`packages/app/.secrets/`) and rewrites the `projectId` and `owner` in
+that config before prebuild — `owner` and `slug` too, so nothing in the config names a
+project that is not ours. It checks the Firebase file actually registers `sh.paseo.edge`
+first, because Gradle's own version of that error arrives half an hour into the build.
+
+The daemon needs nothing: it only forwards the token the app gives it, so any Edge daemon —
+or a stock one — can push to an Edge app built this way.
+
+### The signing key
+
+Release builds are signed with an Edge key, not the public debug key Expo's template
+defaults to. The workflow reads it from two repository secrets,
+`EDGE_ANDROID_KEYSTORE_BASE64` and `EDGE_ANDROID_KEYSTORE_PASSWORD`, and fails before the
+build starts if either is missing. It also refuses to upload an APK signed by
+`CN=Android Debug`, which is the one failure that would otherwise produce a working,
+installable, wrong artifact.
+
+The keystore lives at `~/.local/share/paseo-edge/` on Josh's machine, with a `README.txt`
+next to it. **Back it up.** GitHub secrets are write-only, so that is the only copy, and
+Android ties an installed app to the key that signed it: losing it means every phone with
+Edge on it has to uninstall (losing app data) before it can take another build.
+
+### Building one locally
+
+Needs the Android toolchain from [docs/android.md](android.md) and JDK 21:
+
+```bash
+npm ci
+npm run eas-build-post-install --workspace=@getpaseo/app
+(cd packages/app && CI=1 APP_VARIANT=production npx expo prebuild --platform android --clean --no-install)
+scripts/edge/android-identity.sh
+cd packages/app/android
+EDGE_ANDROID_KEYSTORE=~/.local/share/paseo-edge/android-release.keystore \
+EDGE_ANDROID_KEYSTORE_PASSWORD="$(cat ~/.local/share/paseo-edge/android-keystore-password.txt)" \
+  ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+```
+
+The APK lands in `packages/app/android/app/build/outputs/apk/release/`. The identity script
+refuses to run twice over one project, so re-run prebuild with `--clean` between builds.
+Building without the keystore variables fails at Gradle configuration time on purpose:
+falling back to the debug key would produce something that installs and looks right.
 
 ## Versions
 
@@ -255,9 +375,9 @@ gh api -X PUT repos/josham/paseo/actions/workflows/deploy-website.yml/disable
 That endpoint 404s on a workflow GitHub has not registered, so it only works after the
 workflow has run at least once.
 
-Only Linux x64 is built. Windows would be one more job and needs no secrets; macOS needs
-an Apple Developer certificate to produce something users can open without fighting
-Gatekeeper.
+Linux x64 and Android arm64 are built. Windows would be one more job and needs no
+secrets; macOS needs an Apple Developer certificate to produce something users can open
+without fighting Gatekeeper, and iOS cannot be sideloaded at all without one.
 
 ## Licensing
 
