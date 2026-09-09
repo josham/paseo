@@ -1185,6 +1185,133 @@ describe("terminal MCP tools", () => {
   });
 });
 
+describe("agent-facing privilege guards", () => {
+  const logger = createTestLogger();
+
+  it("refuses to write daemon-managed labels through update_agent", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({ id: "agent-1", cwd: REPO_CWD });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "caller-agent",
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "update_agent").handler({
+        agentId: "agent-1",
+        labels: { [PARENT_AGENT_ID_LABEL]: "caller-agent" },
+      }),
+    ).rejects.toThrow(/reserved/i);
+    expect(spies.agentManager.updateAgentMetadata).not.toHaveBeenCalled();
+  });
+
+  it("allows ordinary labels through update_agent", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({ id: "agent-1", cwd: REPO_CWD });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "caller-agent",
+      logger,
+    });
+
+    await registeredTool(server, "update_agent").handler({
+      agentId: "agent-1",
+      labels: { source: "handoff" },
+    });
+
+    expect(spies.agentManager.updateAgentMetadata).toHaveBeenCalled();
+  });
+
+  it("refuses to put another agent into an unattended mode", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const manager = createOpenCodeManager();
+    spies.agentManager.getAgent.mockImplementation((id: string) =>
+      id === "caller-agent"
+        ? { id, cwd: REPO_CWD, currentModeId: "default", availableModes: [] }
+        : { id, cwd: REPO_CWD, currentModeId: "default", availableModes: [] },
+    );
+    // The target mode is unattended; the caller's current mode is not.
+    manager.stub.isUnattendedModeForAgent.mockImplementation(
+      (_agent, modeId) => modeId === "bypassPermissions",
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: manager.manager,
+      callerAgentId: "caller-agent",
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "set_agent_mode").handler({
+        agentId: "victim-agent",
+        modeId: "bypassPermissions",
+      }),
+    ).rejects.toThrow(/without permission prompts/i);
+    expect(spies.agentManager.setAgentMode).not.toHaveBeenCalled();
+  });
+
+  it("lets an already-unattended caller pass that mode on", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const manager = createOpenCodeManager();
+    spies.agentManager.getAgent.mockImplementation((id: string) => ({
+      id,
+      cwd: REPO_CWD,
+      currentModeId: "bypassPermissions",
+      availableModes: [],
+    }));
+    manager.stub.isUnattendedModeForAgent.mockImplementation(
+      (_agent, modeId) => modeId === "bypassPermissions",
+    );
+    spies.agentManager.setAgentMode.mockResolvedValue({ modeId: "bypassPermissions" });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: manager.manager,
+      callerAgentId: "caller-agent",
+      logger,
+    });
+
+    await registeredTool(server, "set_agent_mode").handler({
+      agentId: "child-agent",
+      modeId: "bypassPermissions",
+    });
+
+    expect(spies.agentManager.setAgentMode).toHaveBeenCalled();
+  });
+
+  it("leaves operator surfaces alone when there is no calling agent", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const manager = createOpenCodeManager();
+    spies.agentManager.getAgent.mockReturnValue({
+      id: "agent-1",
+      cwd: REPO_CWD,
+      currentModeId: "default",
+      availableModes: [],
+    });
+    manager.stub.isUnattendedModeForAgent.mockReturnValue(true);
+    spies.agentManager.setAgentMode.mockResolvedValue({ modeId: "bypassPermissions" });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: manager.manager,
+      logger,
+    });
+
+    await registeredTool(server, "set_agent_mode").handler({
+      agentId: "agent-1",
+      modeId: "bypassPermissions",
+    });
+
+    expect(spies.agentManager.setAgentMode).toHaveBeenCalled();
+  });
+});
+
 describe("create_agent MCP tool", () => {
   const logger = createTestLogger();
   const existingCwd = process.cwd();
