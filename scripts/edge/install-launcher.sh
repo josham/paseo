@@ -128,13 +128,16 @@ chmod +x "$launcher"
 # no icon at all and Plasma falls back to breeze/apps/48/wayland.svg -- a gold "W".
 #
 # --class=paseo-edge does not help; it is X11-only and a window launched with it still
-# reports getpaseo-desktop (measured). Fixing this properly means app.setDesktopName()
-# in main.ts, which is a code change and belongs upstream.
+# reports getpaseo-desktop (measured). Nor is it the space in productName "Paseo Edge":
+# a build with productName "Paseo" on the same toolchain reports getpaseo-desktop too.
+# It is a version change. Paseo 0.5.0-beta.4 reported app_id "Paseo", which is why an
+# old stock install still matches its own StartupWMClass=Paseo and shows the right icon;
+# current builds on Electron 44 do not. So this is upstream's bug as much as ours, and
+# the fix at the source is app.setDesktopName() in main.ts.
 #
-# Stock Paseo reports the same app_id, so if both apps are installed this entry claims
-# both. That is the right trade here: upstream's own paseo-desktop.desktop ships
-# StartupWMClass=Paseo, which never matches on Wayland, so it shows the fallback either
-# way.
+# While a stock install predates the change its app_id stays "Paseo" and the two entries
+# stay distinct. Once stock updates, both report getpaseo-desktop and this entry claims
+# either window.
 cat > "$desktop_entry" <<ENTRY
 [Desktop Entry]
 Name=Paseo Edge
