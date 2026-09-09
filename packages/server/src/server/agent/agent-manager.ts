@@ -55,6 +55,8 @@ import {
 import { buildArchivedAgentRecord, type ArchivedStoredAgentRecord } from "./agent-archive.js";
 import type { StoredAgentRecord, AgentStorage } from "./agent-storage.js";
 import type { AgentOwner } from "./agent-owner.js";
+import type { LaunchStrategyRegistry } from "../devcontainer/launch-strategy-registry.js";
+import type { ProcessLaunchStrategy } from "../devcontainer/launch-strategy.js";
 import {
   InMemoryAgentTimelineStore,
   type SeedAgentTimelineOptions,
@@ -303,6 +305,11 @@ export interface AgentManagerOptions {
   paseoToolsEnabled?: boolean;
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
+  launchStrategyRegistry?: LaunchStrategyRegistry;
+  resolveLaunchStrategy?: (
+    cwd: string,
+    workspaceId?: string,
+  ) => Promise<ProcessLaunchStrategy | null>;
   appendSystemPrompt?: string;
   agentStreamCoalesceWindowMs?: number;
   rescueTimeouts?: AgentManagerRescueTimeouts;
@@ -720,6 +727,10 @@ export class AgentManager {
   private readonly resolvePaseoToolPolicy: (
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
+  private launchStrategyRegistry: LaunchStrategyRegistry | null = null;
+  private resolveLaunchStrategy:
+    | ((cwd: string, workspaceId?: string) => Promise<ProcessLaunchStrategy | null>)
+    | null = null;
   private appendSystemPrompt: string;
   private onAgentAttention?: AgentAttentionCallback;
   private onAgentArchived?: AgentArchivedCallback;
@@ -729,6 +740,7 @@ export class AgentManager {
   private readonly beforeSteerUnavailableFallback?: AgentManagerOptions["beforeSteerUnavailableFallback"];
   private acceptingAgentRegistrations = true;
 
+  // eslint-disable-next-line complexity
   constructor(options: AgentManagerOptions) {
     this.pluginLifecycle = options.pluginLifecycle;
     this.idFactory = options?.idFactory ?? (() => randomUUID());
@@ -740,7 +752,10 @@ export class AgentManager {
     this.mcpAuthToken = options?.mcpAuthToken ?? null;
     this.configurePaseoTools(options);
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
+    this.launchStrategyRegistry = options.launchStrategyRegistry ?? null;
+    this.resolveLaunchStrategy = options.resolveLaunchStrategy ?? null;
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
+    this.configurePaseoTools(options);
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
     this.rescueTimeouts = {
       reloadSessionCloseMs:
@@ -761,6 +776,23 @@ export class AgentManager {
       providerDefinitions: options.providerDefinitions ?? {},
       clients: options.clients ?? {},
     });
+  }
+
+  /**
+   * Lenient launch strategy resolver for catalog/metadata operations.
+   * Tries the container first, falls back to host if the container isn't
+   * running or doesn't have the tool. Catalog discovery is a read-only
+   * probe — the host's answer is safe when the container can't answer.
+   * Agent execution uses the strict resolver (buildLaunchContext) which
+   * throws rather than falling back.
+   */
+  private async resolveLaunchStrategyForCwd(cwd: string): Promise<ProcessLaunchStrategy | null> {
+    if (!this.resolveLaunchStrategy) return null;
+    try {
+      return await this.resolveLaunchStrategy(cwd);
+    } catch {
+      return null;
+    }
   }
 
   private configurePaseoTools(options: AgentManagerOptions): void {
@@ -963,12 +995,16 @@ export class AgentManager {
     const providerResults = await Promise.all(
       providerEntries.map(async ([provider, client]) => {
         try {
+          const launchStrategy = options?.cwd
+            ? await this.resolveLaunchStrategyForCwd(options.cwd)
+            : null;
           const sessions = await withTimeout(
             client.listImportableSessions!({
               limit: options?.limit,
               query: options?.query,
               scanLimit: options?.scanLimit,
               cwd: options?.cwd,
+              ...(launchStrategy ? { launchStrategy } : {}),
             }),
             IMPORTABLE_SESSION_LIST_TIMEOUT_MS,
             `Timed out listing importable sessions for provider '${provider}' after ${IMPORTABLE_SESSION_LIST_TIMEOUT_MS}ms`,
@@ -5037,6 +5073,7 @@ export class AgentManager {
       : next;
   }
 
+  // oxlint-disable-next-line eslint(complexity): plugin lifecycle plus the container gate
   private async buildLaunchContext(
     agentId: string,
     client: AgentClient,
@@ -5081,6 +5118,25 @@ export class AgentManager {
         paseoToolPolicy,
       });
     }
+    if (cwd) {
+      // Use resolveLaunchStrategy (which checks per-workspace approval) when
+      // available. Fall back to the registry directly for backward compat.
+      if (this.resolveLaunchStrategy) {
+        // upstream's opening descriptor already carries the workspace, so the
+        // container lookup reads it from there rather than a parallel param.
+        const strategy = await this.resolveLaunchStrategy(cwd, opening?.workspaceId ?? undefined);
+        context.launchStrategy = strategy ?? undefined;
+      } else if (this.launchStrategyRegistry) {
+        context.launchStrategy = await this.launchStrategyRegistry.awaitStrategy(cwd);
+      }
+      if (context.launchStrategy?.isIsolated && !client.capabilities.supportsIsolatedLaunch) {
+        // Running it anyway would put the agent on the host while the user
+        // believes it is contained.
+        throw new Error(
+          `Provider '${client.provider}' cannot run inside a container yet. Switch this workspace to Host, or use a provider that supports containers.`,
+        );
+      }
+    }
     return context;
   }
 
@@ -5088,7 +5144,40 @@ export class AgentManager {
     launchConfig: AgentSessionConfig,
     launchContext: AgentLaunchContext,
   ): AgentSessionConfig {
-    return launchContext.paseoTools ? stripInternalPaseoMcpServer(launchConfig) : launchConfig;
+    return launchContext.paseoTools
+      ? stripInternalPaseoMcpServer(launchConfig)
+      : this.applyLaunchStrategyToMcpConfig(launchConfig, launchContext);
+  }
+
+  /**
+   * The daemon's MCP endpoint is addressed as loopback, which inside a
+   * container means the container itself. Rewrite it to an address the agent
+   * can actually reach, and drop the server outright when there is none —
+   * an unreachable MCP server costs the agent a full tool-call timeout on
+   * every call instead of simply not being there.
+   */
+  private applyLaunchStrategyToMcpConfig(
+    launchConfig: AgentSessionConfig,
+    launchContext: AgentLaunchContext,
+  ): AgentSessionConfig {
+    const strategy = launchContext.launchStrategy;
+    const agentId = launchContext.agentId;
+    if (!strategy?.isIsolated || !this.mcpBaseUrl || !agentId) return launchConfig;
+
+    const reachableUrl = strategy.resolveDaemonUrl(this.mcpBaseUrl);
+    if (!reachableUrl) {
+      this.logger.warn(
+        { agentId, mcpBaseUrl: this.mcpBaseUrl },
+        "Paseo MCP tools are unavailable to this agent: the daemon is not reachable from the container. Bind the daemon to a non-loopback address to enable them.",
+      );
+      return stripInternalPaseoMcpServer(launchConfig);
+    }
+    return withRuntimePaseoMcpServer({
+      config: stripInternalPaseoMcpServer(launchConfig),
+      agentId,
+      mcpBaseUrl: reachableUrl,
+      mcpAuthToken: this.mcpAuthToken,
+    });
   }
 
   private async requireAvailableClient(options: { provider: AgentProvider }): Promise<AgentClient> {
@@ -5150,12 +5239,15 @@ export class AgentManager {
     const sync =
       state === "archive" ? client?.archiveNativeSession : client?.unarchiveNativeSession;
     if (!sync) return;
+    const cwd =
+      typeof persistence.metadata?.cwd === "string" ? persistence.metadata.cwd : undefined;
+    const launchStrategy = cwd ? await this.resolveLaunchStrategyForCwd(cwd) : null;
     if (state === "restore") {
-      await sync.call(client, persistence);
+      await sync.call(client, persistence, launchStrategy ? { launchStrategy } : undefined);
       return;
     }
     try {
-      await sync.call(client, persistence);
+      await sync.call(client, persistence, launchStrategy ? { launchStrategy } : undefined);
     } catch (error) {
       this.logger.warn(
         { error, provider, sessionId: persistence.sessionId },
