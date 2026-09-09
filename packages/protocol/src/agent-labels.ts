@@ -9,6 +9,18 @@ export function isOpenAgentTabLabel(label: string): boolean {
   return label.startsWith(OPEN_AGENT_TAB_LABEL_PREFIX);
 }
 
+/**
+ * Labels under this prefix are daemon-managed control state, not user metadata:
+ * parentage and open-tab tracking live here. Agent-facing surfaces must refuse
+ * to write them, because code elsewhere trusts them to describe relationships
+ * the agent does not get to choose for itself.
+ */
+const RESERVED_AGENT_LABEL_PREFIX = "paseo.";
+
+export function isReservedAgentLabel(label: string): boolean {
+  return label.startsWith(RESERVED_AGENT_LABEL_PREFIX);
+}
+
 export interface AgentLabelSource {
   labels?: Record<string, unknown> | null;
 }
