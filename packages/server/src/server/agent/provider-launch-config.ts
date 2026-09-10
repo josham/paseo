@@ -4,6 +4,8 @@ import {
   findExecutable,
 } from "../../executable-resolution/executable-resolution.js";
 import { createExternalProcessEnv, type ProcessEnvRecord } from "../paseo-env.js";
+import type { Logger } from "pino";
+import type { ProcessLaunchStrategy } from "../devcontainer/launch-strategy.js";
 export {
   AgentProviderRuntimeSettingsMapSchema,
   ProviderCommandSchema,
@@ -121,6 +123,35 @@ export async function checkProviderLaunchAvailable(
     available: resolvedPath !== null,
     resolvedPath,
   };
+}
+
+/**
+ * Whether a provider's command exists in the container a session would run in.
+ * The container equivalent of `checkProviderLaunchAvailable`, which answers for
+ * the host and says nothing about the image.
+ *
+ * It logs the reason it says no, and that is the point of it existing. Every
+ * way this can fail — the tool missing from the image, a workspace mounted at a
+ * path `docker exec -w` cannot enter, a container that never came up — arrives
+ * here as an exception and leaves as `false`, and one `false` is
+ * indistinguishable from another by the time the user is told the provider is
+ * not available.
+ */
+export async function isCommandAvailableInContainer(input: {
+  strategy: Pick<ProcessLaunchStrategy, "resolveExecutable">;
+  command: string;
+  logger: Logger;
+}): Promise<boolean> {
+  try {
+    await input.strategy.resolveExecutable(input.command);
+    return true;
+  } catch (error) {
+    input.logger.warn(
+      { err: error, command: input.command },
+      "Provider command did not resolve in the container",
+    );
+    return false;
+  }
 }
 
 export async function resolveProviderCommandPrefix(

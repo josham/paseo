@@ -102,6 +102,14 @@ const PersistedWorkspaceRecordSchema = z.object({
     .transform((value) => value ?? null),
   labels: z.array(z.string()).optional(),
   untrustedSource: UntrustedWorkspaceSourceSchema.optional(),
+  // SHA-256 hash of the devcontainer.json used to build the running container.
+  // Compared on startup and file-watch to detect config drift. Null when no
+  // container has been built or no devcontainer.json exists.
+  containerConfigHash: z.string().nullable().default(null),
+  // The selected execution backend for this workspace. null = run agents and
+  // terminals directly on the host; a string (e.g. "devcontainer") is a
+  // backend ID looked up in the ContainerBackendRegistry.
+  containerBackend: z.string().nullable().default(null),
 });
 
 export type PersistedProjectRecord = z.infer<typeof PersistedProjectRecordSchema>;
@@ -684,6 +692,7 @@ export function createPersistedWorkspaceRecord(input: {
   pinnedAt?: string | null;
   labels?: string[];
   untrustedSource?: UntrustedWorkspaceSource;
+  containerBackend?: string | null;
 }): PersistedWorkspaceRecord {
   return PersistedWorkspaceRecordSchema.parse({
     ...input,
@@ -696,6 +705,7 @@ export function createPersistedWorkspaceRecord(input: {
     archivedAt: input.archivedAt ?? null,
     autoArchivedChangeRequestUrl: input.autoArchivedChangeRequestUrl ?? null,
     pinnedAt: input.pinnedAt ?? null,
+    containerBackend: input.containerBackend ?? null,
   });
 }
 

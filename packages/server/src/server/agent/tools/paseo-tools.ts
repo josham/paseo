@@ -33,6 +33,7 @@ import {
 } from "../../workspace-archive-service.js";
 import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
+import type { ProcessLaunchStrategy } from "../../devcontainer/launch-strategy.js";
 import type { FirstAgentContext } from "../../messages.js";
 import { isReservedAgentLabel } from "@getpaseo/protocol/agent-labels";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
@@ -145,6 +146,15 @@ export interface PaseoToolHostDependencies {
    */
   resolveSpeakHandler?: (callerAgentId: string) => VoiceSpeakHandler | null;
   resolveCallerContext?: (callerAgentId: string) => VoiceCallerContext | null;
+  /**
+   * Where a workspace's processes run. Without this, a terminal created
+   * through MCP lands on the host even when the calling agent is confined to
+   * a container — the UI's terminal path resolves the same strategy.
+   */
+  resolveLaunchStrategy?: (
+    cwd: string,
+    workspaceId?: string,
+  ) => Promise<ProcessLaunchStrategy | null>;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;
   logger: Logger;
@@ -2435,10 +2445,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
       const resolvedCwd = resolveScopedCwd(cwd, { required: true });
       const workspaceId = await resolveTerminalWorkspaceId(resolvedCwd);
+      // Run the terminal wherever the workspace runs. A container-backed
+      // workspace keeps its terminals inside the container, so an agent
+      // confined to one cannot use this tool to reach the host.
+      const launchStrategy = await options.resolveLaunchStrategy?.(resolvedCwd, workspaceId);
 
       const terminal = await terminalManager.createTerminal({
         cwd: resolvedCwd,
         workspaceId,
+        containerExec: launchStrategy?.serialize() ?? null,
         ...(name?.trim() ? { name: name.trim() } : {}),
       });
 

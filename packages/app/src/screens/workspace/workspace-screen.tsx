@@ -19,7 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type Href } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react-native";
+import { ChevronDown, Container } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
@@ -42,6 +42,9 @@ import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import { WorkspaceScriptsButton } from "@/screens/workspace/workspace-scripts-button";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
+import { ContainerConfigChangedBanner } from "@/components/container-config-changed-banner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContainerStatusTooltipBody } from "@/components/container-status-tooltip";
 import { useToast } from "@/contexts/toast-context";
 import { getOrCreateClientId } from "@/utils/client-id";
 import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
@@ -249,6 +252,8 @@ const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const greenColorMapping = (theme: Theme) => ({ color: theme.colors.palette.green[500] });
+const ThemedContainer = withUnistyles(Container);
 
 const GATED_WORKSPACE_HEADER_LEFT = <SidebarMenuToggle />;
 
@@ -952,6 +957,9 @@ interface WorkspaceHeaderTitleBarProps {
   title: string;
   subtitle: string;
   isSubtitleDistinct: boolean;
+  containerStatus?: "running" | "starting" | "stopped";
+  hasDevContainerConfig?: boolean;
+  containerInfo?: WorkspaceDescriptor["containerInfo"];
   currentBranchName: string | null;
   normalizedServerId: string;
   normalizedWorkspaceId: string;
@@ -971,6 +979,8 @@ interface WorkspaceHeaderTitleBarProps {
   onCopyWorkspacePath: () => void;
   onCopyBranchName: () => void;
   onOpenSetupTab: () => void;
+  onRestartContainer: () => void;
+  onRebuildContainer: () => void;
   onScriptTerminalStarted: (terminalId: string) => void;
   onViewScriptTerminal: (terminalId: string) => void;
   onOpenUrlInBrowserTab: (url: string) => void;
@@ -982,6 +992,9 @@ function WorkspaceHeaderTitleBar({
   subtitle,
   isSubtitleDistinct,
   currentBranchName,
+  containerStatus,
+  hasDevContainerConfig,
+  containerInfo,
   normalizedServerId,
   normalizedWorkspaceId,
   workspaceScripts,
@@ -1000,10 +1013,13 @@ function WorkspaceHeaderTitleBar({
   onCopyWorkspacePath,
   onCopyBranchName,
   onOpenSetupTab,
+  onRestartContainer,
+  onRebuildContainer,
   onScriptTerminalStarted,
   onViewScriptTerminal,
   onOpenUrlInBrowserTab,
 }: WorkspaceHeaderTitleBarProps) {
+  const { t } = useTranslation();
   return (
     <View style={styles.headerTitleContainer}>
       {isLoading ? (
@@ -1013,6 +1029,27 @@ function WorkspaceHeaderTitleBar({
       ) : (
         <View style={styles.headerTitleTextGroup}>
           <ScreenTitle testID="workspace-header-title">{title}</ScreenTitle>
+          {containerStatus ? (
+            <Tooltip delayDuration={0} enabledOnDesktop>
+              <TooltipTrigger asChild>
+                <View style={styles.containerBadge} testID="workspace-container-badge">
+                  <ThemedContainer
+                    size={12}
+                    uniProps={containerStatus === "running" ? greenColorMapping : mutedColorMapping}
+                  />
+                  <Text style={styles.containerBadgeText}>
+                    {t(`workspace.header.container.${containerStatus}`)}
+                  </Text>
+                </View>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="center" offset={4} maxWidth={320}>
+                <ContainerStatusTooltipBody
+                  containerStatus={containerStatus}
+                  containerInfo={containerInfo}
+                />
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           <WorkspaceHeaderProjectRow
             subtitle={subtitle}
             isSubtitleDistinct={isSubtitleDistinct}
@@ -1038,6 +1075,10 @@ function WorkspaceHeaderTitleBar({
             onCopyWorkspacePath={onCopyWorkspacePath}
             onCopyBranchName={onCopyBranchName}
             onOpenSetupTab={onOpenSetupTab}
+            containerStatus={containerStatus}
+            hasDevContainerConfig={hasDevContainerConfig}
+            onRestartContainer={onRestartContainer}
+            onRebuildContainer={onRebuildContainer}
           />
         ) : (
           <WorkspaceHeaderMenuDesktop
@@ -1049,6 +1090,10 @@ function WorkspaceHeaderTitleBar({
             onCopyWorkspacePath={onCopyWorkspacePath}
             onCopyBranchName={onCopyBranchName}
             onOpenSetupTab={onOpenSetupTab}
+            containerStatus={containerStatus}
+            hasDevContainerConfig={hasDevContainerConfig}
+            onRestartContainer={onRestartContainer}
+            onRebuildContainer={onRebuildContainer}
           />
         )}
         {isMobile && workspaceScripts.length > 0 ? (
@@ -1534,6 +1579,7 @@ function useLastMainPane(input: {
   return lastMainPaneRef;
 }
 
+// eslint-disable-next-line complexity
 function WorkspaceScreenContent({
   serverId,
   workspaceId,
@@ -2819,6 +2865,37 @@ function WorkspaceScreenContent({
     }
     openWorkspaceTabFocused(persistenceKey, target, FOCUSED_PANE_PLACEMENT);
   }, [normalizedWorkspaceId, openWorkspaceTabFocused, persistenceKey]);
+  const handleRestartContainer = useCallback(async () => {
+    if (!client || !normalizedWorkspaceId) return;
+    const confirmed = await confirmDialog({
+      title: t("workspace.header.container.restartConfirmTitle"),
+      message: t("workspace.header.container.restartConfirmMessage"),
+      confirmLabel: t("workspace.header.container.restartAction"),
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await client.restartContainer(normalizedWorkspaceId);
+    } catch {
+      toast.error(t("workspace.header.container.configChangedMessage"));
+    }
+  }, [client, normalizedWorkspaceId, toast, t]);
+
+  const handleRebuildContainer = useCallback(async () => {
+    if (!client || !normalizedWorkspaceId) return;
+    const confirmed = await confirmDialog({
+      title: t("workspace.header.container.rebuildConfirmTitle"),
+      message: t("workspace.header.container.rebuildConfirmMessage"),
+      confirmLabel: t("workspace.header.container.rebuildAction"),
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await client.rebuildContainer(normalizedWorkspaceId);
+    } catch {
+      toast.error(t("workspace.header.container.configChangedMessage"));
+    }
+  }, [client, normalizedWorkspaceId, toast, t]);
 
   const handleBulkCloseTabs = useCallback(
     async (input: {
@@ -3890,6 +3967,9 @@ function WorkspaceScreenContent({
                 title={workspaceHeaderTitle}
                 subtitle={workspaceHeaderSubtitle}
                 isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
+                containerStatus={workspaceDescriptor?.containerStatus ?? undefined}
+                hasDevContainerConfig={workspaceDescriptor?.hasDevContainerConfig ?? undefined}
+                containerInfo={workspaceDescriptor?.containerInfo ?? undefined}
                 currentBranchName={currentBranchName}
                 normalizedServerId={normalizedServerId}
                 normalizedWorkspaceId={normalizedWorkspaceId}
@@ -3909,6 +3989,8 @@ function WorkspaceScreenContent({
                 onCopyWorkspacePath={handleCopyWorkspacePath}
                 onCopyBranchName={handleCopyBranchName}
                 onOpenSetupTab={handleOpenSetupTab}
+                onRestartContainer={handleRestartContainer}
+                onRebuildContainer={handleRebuildContainer}
                 onScriptTerminalStarted={handleScriptTerminalStarted}
                 onViewScriptTerminal={handleViewScriptTerminal}
                 onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
@@ -3922,6 +4004,8 @@ function WorkspaceScreenContent({
       canOpenImportSheet,
       createTerminalDisabled,
       currentBranchName,
+      handleRestartContainer,
+      handleRebuildContainer,
       handleCopyBranchName,
       handleCopyWorkspacePath,
       handleCreateBrowserTab,
@@ -3947,6 +4031,7 @@ function WorkspaceScreenContent({
       workspaceHeaderTitle,
       isWorkspaceHeaderSubtitleDistinct,
       workspaceScripts,
+      workspaceDescriptor,
     ],
   );
   const desktopSplitContent = useMemo(() => {
@@ -4038,6 +4123,10 @@ function WorkspaceScreenContent({
   const workspaceCenterColumn = (
     <View style={styles.centerColumn}>
       {rendersDesktopSplitContent ? null : renderWorkspaceScreenHeader()}
+      <ContainerConfigChangedBanner
+        serverId={normalizedServerId}
+        workspaceId={normalizedWorkspaceId}
+      />
 
       {isMobile ? (
         <MobileWorkspaceTabSwitcher
@@ -4213,6 +4302,19 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundExtraMuted,
     fontSize: theme.fontSize.sm,
     flexShrink: 0,
+  },
+  containerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.surface2,
+  },
+  containerBadgeText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   headerTitleSkeleton: {
     width: 220,
