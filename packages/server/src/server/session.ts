@@ -43,6 +43,7 @@ import type { BinaryFrame } from "@getpaseo/protocol/binary-frames/index";
 import { CursorError } from "./pagination/cursor.js";
 import { SortablePager, type SortSpec } from "./pagination/sortable-pager.js";
 import { matchesAgentHistoryQuery } from "./agent-history-search.js";
+import type { PromptHistoryStore } from "./prompt-history/store.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech/speech-provider.js";
 import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js";
 import {
@@ -464,6 +465,8 @@ export interface SessionOptions {
   workspaceLabelService?: WorkspaceLabelService;
   filesystem?: SessionFileSystem;
   scheduleService: ScheduleService;
+  /** Absent only in tests that never exercise prompt recall. */
+  promptHistory?: PromptHistoryStore;
   checkoutDiffManager: CheckoutDiffManager;
   github?: ForgeService;
   createAgentMcpTransport?: AgentMcpTransportFactory;
@@ -717,6 +720,7 @@ export class Session {
   private readonly agentStorage: AgentStorage;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
+  private readonly promptHistory: PromptHistoryStore | undefined;
   private readonly directorySync: DirectorySyncService;
   private readonly filesystem: SessionFileSystem;
   private readonly github: ForgeService;
@@ -813,6 +817,7 @@ export class Session {
       agentStorage,
       projectRegistry,
       workspaceRegistry,
+      promptHistory,
       directorySync,
       workspaceLabelService,
       filesystem,
@@ -888,6 +893,7 @@ export class Session {
     this.agentStorage = agentStorage;
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
+    this.promptHistory = promptHistory;
     this.directorySync = resolveDirectorySync(directorySync);
     this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
     this.filesystem = filesystem ?? nodeSessionFileSystem;
@@ -3052,6 +3058,9 @@ export class Session {
       case "register_push_token":
         this.handleRegisterPushToken(msg.token);
         return;
+      case "prompt.history.list.request":
+        await this.handlePromptHistoryListRequest(msg);
+        return;
       case "push.unregister.request":
         this.pushNotifications.revoke(msg.token);
         if (this.currentClientMetadata().pushToken?.trim() === msg.token.trim()) {
@@ -3822,6 +3831,64 @@ export class Session {
     }
   }
 
+  private async handlePromptHistoryListRequest(
+    msg: Extract<SessionInboundMessage, { type: "prompt.history.list.request" }>,
+  ): Promise<void> {
+    try {
+      const entries = this.promptHistory
+        ? await this.promptHistory.list({ projectKey: msg.projectKey, limit: msg.limit })
+        : [];
+      this.emit({
+        type: "prompt.history.list.response",
+        payload: {
+          projectKey: msg.projectKey,
+          entries,
+          error: null,
+          requestId: msg.requestId,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "prompt.history.list.response",
+        payload: {
+          projectKey: msg.projectKey,
+          entries: [],
+          error: error instanceof Error ? error.message : String(error),
+          requestId: msg.requestId,
+        },
+      });
+    }
+  }
+
+  /**
+   * Remember a prompt a person sent, for the composer's recall list. Recall is
+   * per project, so a prompt only lands once its agent resolves to a workspace;
+   * an agent outside the registry contributes nothing rather than landing in a
+   * bucket the composer will never ask for.
+   *
+   * Deliberately not awaited. Recall is a convenience, and a slow or failed
+   * write must never delay or fail the send it came from.
+   */
+  private recordPromptHistory(input: {
+    agentId?: string;
+    workspaceId?: string;
+    text: string;
+  }): void {
+    const store = this.promptHistory;
+    if (!store) return;
+    void (async () => {
+      const workspaceId =
+        input.workspaceId ??
+        (input.agentId ? (await this.agentStorage.get(input.agentId))?.workspaceId : undefined);
+      if (!workspaceId) return;
+      const workspace = await this.workspaceRegistry.get(workspaceId);
+      if (!workspace) return;
+      await store.record({ projectKey: workspace.projectId, text: input.text });
+    })().catch((error) => {
+      this.sessionLogger.warn({ err: error }, "Failed to record prompt history");
+    });
+  }
+
   /**
    * Handle text message to agent (with optional image attachments)
    */
@@ -3850,6 +3917,7 @@ export class Session {
       }`,
     );
 
+    this.recordPromptHistory({ agentId, text });
     const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
     const prompt = buildAgentPrompt(promptText, images, attachments);
 
@@ -4286,6 +4354,14 @@ export class Session {
         },
       );
       createdAgentId = snapshot.id;
+      // callerAgentId marks an agent spawned by another agent; only a person's
+      // opening prompt belongs in recall.
+      if (trimmedPrompt && !msg.callerAgentId) {
+        this.recordPromptHistory({
+          workspaceId: resolvedIntent.intent.workspaceId,
+          text: trimmedPrompt,
+        });
+      }
       await this.agentUpdates.forwardLiveAgent(snapshot);
       if (resolvedIntent.createdDirectoryWorkspace && trimmedPrompt) {
         this.workspaceAutoName.scheduleForDirectory(
@@ -8053,6 +8129,7 @@ export class Session {
     try {
       const agentId = resolved.agentId;
 
+      this.recordPromptHistory({ agentId, text: msg.text });
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       this.sessionLogger.trace(
         {
