@@ -158,6 +158,11 @@ export const en = {
       archiveAgent: "Archive the current agent",
       freshDraft: "Archive this agent and start a fresh draft",
     },
+    promptHistory: {
+      unsupported: "Update the host to search prompt history",
+      emptyHistory: "No prompts sent in this project yet",
+      noMatches: "No matching prompts",
+    },
     github: {
       searching: "Searching...",
       noResults: "No results found.",
@@ -2323,6 +2328,7 @@ export const en = {
         toggleFocusMode: "Toggle focus mode",
         cycleTheme: "Cycle theme",
         focusMessageInput: "Focus message input",
+        searchPromptHistory: "Search prompt history",
         cycleAgentMode: "Cycle agent mode",
         toggleVoiceMode: "Toggle voice mode",
         startStopDictation: "Start/stop dictation",

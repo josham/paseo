@@ -2412,6 +2412,14 @@ export const DirectorySuggestionsRequestSchema = z.object({
   requestId: z.string(),
 });
 
+export const PromptHistoryListRequestSchema = z.object({
+  type: z.literal("prompt.history.list.request"),
+  /** `ProjectPlacementPayload.projectKey`; one history per project. */
+  projectKey: z.string(),
+  limit: z.number().int().min(1).max(500).optional(),
+  requestId: z.string(),
+});
+
 export const PaseoWorktreeListRequestSchema = z.object({
   type: z.literal("paseo_worktree_list_request"),
   cwd: z.string().optional(),
@@ -3194,6 +3202,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ForgeSearchRequestSchema,
   GitHubSearchRequestSchema,
   DirectorySuggestionsRequestSchema,
+  PromptHistoryListRequestSchema,
   PaseoWorktreeListRequestSchema,
   PaseoWorktreeArchiveRequestSchema,
   CreatePaseoWorktreeRequestSchema,
@@ -3431,6 +3440,8 @@ export const ServerInfoStatusPayloadSchema = z
     // COMPAT(providersSnapshot): added in v0.1.48, remove gating when all clients use snapshot
     features: z
       .object({
+        // COMPAT(promptHistory): added in v0.8.0; remove gate after 2027-03-10.
+        promptHistory: z.boolean().optional(),
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
@@ -5671,6 +5682,23 @@ export const DirectorySuggestionsResponseSchema = z.object({
   }),
 });
 
+export const PromptHistoryEntrySchema = z.object({
+  text: z.string(),
+  /** Epoch ms of the most recent send of this exact text. */
+  at: z.number(),
+});
+
+export const PromptHistoryListResponseSchema = z.object({
+  type: z.literal("prompt.history.list.response"),
+  payload: z.object({
+    projectKey: z.string(),
+    /** Newest first. */
+    entries: z.array(PromptHistoryEntrySchema),
+    error: z.string().nullable(),
+    requestId: z.string(),
+  }),
+});
+
 const PaseoWorktreeSchema = z.object({
   worktreePath: z.string(),
   createdAt: z.string(),
@@ -6613,6 +6641,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ForgeSearchResponseSchema,
   GitHubSearchResponseSchema,
   DirectorySuggestionsResponseSchema,
+  PromptHistoryListResponseSchema,
   PaseoWorktreeListResponseSchema,
   PaseoWorktreeArchiveResponseSchema,
   CreatePaseoWorktreeResponseSchema,
@@ -7026,6 +7055,9 @@ export type ChangeRequestCheckoutSource = z.infer<typeof ChangeRequestCheckoutSo
 export type CreatePaseoWorktreeRequest = z.infer<typeof CreatePaseoWorktreeRequestSchema>;
 export type DirectorySuggestionsRequest = z.infer<typeof DirectorySuggestionsRequestSchema>;
 export type DirectorySuggestionsResponse = z.infer<typeof DirectorySuggestionsResponseSchema>;
+export type PromptHistoryListRequest = z.infer<typeof PromptHistoryListRequestSchema>;
+export type PromptHistoryListResponse = z.infer<typeof PromptHistoryListResponseSchema>;
+export type PromptHistoryEntry = z.infer<typeof PromptHistoryEntrySchema>;
 export type PaseoWorktreeListRequest = z.infer<typeof PaseoWorktreeListRequestSchema>;
 export type PaseoWorktreeListResponse = z.infer<typeof PaseoWorktreeListResponseSchema>;
 export type PaseoWorktreeArchiveRequest = z.infer<typeof PaseoWorktreeArchiveRequestSchema>;

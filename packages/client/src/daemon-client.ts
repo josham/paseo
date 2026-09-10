@@ -69,6 +69,7 @@ import type {
   GitHubSearchResponse,
   GitHubSearchRequest,
   DirectorySuggestionsResponse,
+  PromptHistoryListResponse,
   PaseoWorktreeListResponse,
   PaseoWorktreeArchiveResponse,
   ProjectIconSource,
@@ -433,6 +434,7 @@ type BranchSuggestionsPayload = BranchSuggestionsResponse["payload"];
 type ForgeSearchPayload = ForgeSearchResponse["payload"];
 type GitHubSearchPayload = GitHubSearchResponse["payload"];
 type DirectorySuggestionsPayload = DirectorySuggestionsResponse["payload"];
+type PromptHistoryListPayload = PromptHistoryListResponse["payload"];
 type PaseoWorktreeListPayload = PaseoWorktreeListResponse["payload"];
 type PaseoWorktreeArchivePayload = PaseoWorktreeArchiveResponse["payload"];
 type CreatePaseoWorktreePayload = Extract<
@@ -4447,6 +4449,32 @@ export class DaemonClient {
       responseType: "directory_suggestions_response",
       // Home-tree scans on large home dirs can take several seconds; don't cut
       // the suggestion request off early (it would surface as an empty list).
+    });
+  }
+
+  /**
+   * COMPAT(promptHistory): added in v0.8.0; remove gate after 2027-03-10.
+   * Prompt recall needs the daemon-side history store, so callers hide the
+   * affordance rather than offering one that can only fail.
+   */
+  supportsPromptHistory(): boolean {
+    return this.lastServerInfoMessage?.features?.promptHistory === true;
+  }
+
+  async listPromptHistory(
+    options: { projectKey: string; limit?: number },
+    requestId?: string,
+  ): Promise<PromptHistoryListPayload> {
+    if (!this.supportsPromptHistory()) {
+      throw new Error("Update the host to use prompt history.");
+    }
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "prompt.history.list.request",
+        projectKey: options.projectKey,
+        limit: options.limit,
+      },
     });
   }
 

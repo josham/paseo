@@ -99,10 +99,19 @@ export interface ComposerInputSnapshot {
   selection: { start: number; end: number };
 }
 
+export interface ComposerModifierKeys {
+  alt: boolean;
+  ctrl: boolean;
+  meta: boolean;
+  shift: boolean;
+}
+
 export interface ComposerKeyPressEvent {
   key: string;
   preventDefault: () => void;
   input: ComposerInputSnapshot;
+  /** Shift+Arrow extends a selection; prompt recall has to leave that alone. */
+  modifiers: ComposerModifierKeys;
 }
 
 export interface MessageInputProps {
@@ -196,6 +205,7 @@ const MAX_INPUT_VIEWPORT_RATIO = 0.5;
 const MIN_INPUT_HEIGHT = isWeb ? MIN_INPUT_HEIGHT_DESKTOP : MIN_INPUT_HEIGHT_MOBILE;
 type WebTextInputKeyPressEvent = NativeSyntheticEvent<
   TextInputKeyPressEventData & {
+    altKey?: boolean;
     metaKey?: boolean;
     ctrlKey?: boolean;
     shiftKey?: boolean;
@@ -404,6 +414,12 @@ function handleDesktopKeyPressImpl(
       key: event.nativeEvent.key,
       preventDefault: () => event.preventDefault(),
       input: ctx.input,
+      modifiers: {
+        alt: event.nativeEvent.altKey === true,
+        ctrl: event.nativeEvent.ctrlKey === true,
+        meta: event.nativeEvent.metaKey === true,
+        shift: event.nativeEvent.shiftKey === true,
+      },
     });
     if (handled) return;
   }

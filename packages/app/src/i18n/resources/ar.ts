@@ -161,6 +161,11 @@ export const ar: TranslationResources = {
       archiveAgent: "أرشفة الوكيل الحالي",
       freshDraft: "أرشفة هذا الوكيل وابدأ مسودة جديدة",
     },
+    promptHistory: {
+      unsupported: "حدّث المضيف للبحث في سجل المطالبات",
+      emptyHistory: "لم تُرسَل أي مطالبات في هذا المشروع بعد",
+      noMatches: "لا توجد مطالبات مطابقة",
+    },
     github: {
       searching: "جارٍ البحث...",
       noResults: "لم يتم العثور على نتائج.",
@@ -2219,6 +2224,7 @@ export const ar: TranslationResources = {
         toggleFocusMode: "تبديل وضع التركيز",
         cycleTheme: "موضوع الدورة",
         focusMessageInput: "التركيز على إدخال الرسالة",
+        searchPromptHistory: "البحث في سجل المطالبات",
         cycleAgentMode: "تبديل وضع الوكيل",
         toggleVoiceMode: "تبديل الوضع الصوتي",
         startStopDictation: "بدء إملاء /stop",

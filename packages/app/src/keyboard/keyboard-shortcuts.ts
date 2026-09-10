@@ -195,6 +195,7 @@ export const SHORTCUT_HELP_ROW_ORDER: Record<ShortcutSectionId, readonly string[
   layout: ["toggle-left-sidebar", "toggle-right-sidebar", "toggle-both-sidebars", "toggle-focus"],
   "agent-input": [
     "focus-message-input",
+    "search-prompt-history",
     "cycle-agent-mode",
     "voice-toggle",
     "dictation-toggle",
@@ -242,6 +243,7 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "toggle-focus": "settings.shortcuts.help.toggleFocusMode",
   "cycle-theme": "settings.shortcuts.help.cycleTheme",
   "focus-message-input": "settings.shortcuts.help.focusMessageInput",
+  "search-prompt-history": "settings.shortcuts.help.searchPromptHistory",
   "cycle-agent-mode": "settings.shortcuts.help.cycleAgentMode",
   "voice-toggle": "settings.shortcuts.help.toggleVoiceMode",
   "dictation-toggle": "settings.shortcuts.help.startStopDictation",
@@ -1070,6 +1072,22 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
       id: "focus-message-input",
       section: "agent-input",
       label: "Focus message input",
+    },
+  },
+  {
+    // Ctrl+R everywhere, including macOS: reload is Cmd+R there, so the
+    // readline binding people already have in their fingers stays free.
+    id: "message-input-history-search-ctrl-r",
+    action: "message-input.action",
+    combo: "Ctrl+R",
+    repeat: false,
+    when: { commandCenter: false, focusScope: "message-input" },
+    payload: { type: "message-input", kind: "history-search" },
+    preventDefault: true,
+    help: {
+      id: "search-prompt-history",
+      section: "agent-input",
+      label: "Search prompt history",
     },
   },
   {
