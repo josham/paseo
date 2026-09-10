@@ -1,0 +1,252 @@
+# Paseo Edge — the josham/paseo fork's own Windows desktop build.
+#
+# This file exists only on edge/tooling (and therefore on edge/main). Upstream never
+# has it, so it never conflicts on a rebase.
+#
+# Windows needs almost nothing from the fork: packages/desktop/electron-builder.yml
+# already carries a full `win:` block (nsis + zip, x64 and arm64, assets/icon.ico and
+# the bin/paseo.cmd CLI shim), after-pack.js prunes win32 natives and runs the packaged
+# smoke test there, and upstream CI exercises the server and desktop packages on
+# windows-latest. So this mirrors the publish-windows job of desktop-release.yml with
+# the Edge identity overrides, the same way edge-linux-release.yml mirrors its Linux
+# sibling — rather than reusing it, because upstream's version parser rejects our tag
+# shape and its electron-builder config publishes to getpaseo.
+#
+# Runs off the same edge-v* tag as the Linux and Android jobs and uploads into the same
+# release. Whichever job gets there first creates it, from the same notes generator.
+#
+# It deliberately does NOT pack the portable daemon bundle: those are platform-neutral
+# npm tarballs and the Linux job already publishes one for the tag.
+
+name: Edge Windows Release
+
+on:
+  push:
+    tags:
+      - "edge-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing edge-v tag to build (e.g. edge-v1.6.1)"
+        required: true
+        type: string
+
+concurrency:
+  group: edge-windows-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  EDGE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  DESKTOP_PACKAGE_PATH: "packages/desktop"
+
+jobs:
+  publish-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.EDGE_TAG }}
+
+      - name: Resolve version and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${EDGE_TAG#edge-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a tag like edge-v1.2.3, got '$EDGE_TAG'"
+            exit 1
+          fi
+          echo "EDGE_VERSION=$version" >> "$GITHUB_ENV"
+
+          # Shared with the Linux and Android jobs: all three run off this tag and any
+          # of them may create the release, so all three write the same notes.
+          scripts/edge/release-notes.sh "$EDGE_TAG" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Set desktop package version from tag
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const version = process.env.EDGE_VERSION;
+          if (!version) throw new Error('EDGE_VERSION env var is missing');
+
+          const packageJsonPath = path.join(process.env.DESKTOP_PACKAGE_PATH, 'package.json');
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          packageJson.version = version;
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+
+      - name: Stamp the Edge build version into the app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Settings -> About reads packages/app/package.json for "App version", and that
+          # number has to stay upstream's: the host page compares it to the daemon's
+          # version, so claiming the Edge number there would report a mismatch against
+          # every daemon on upstream numbering. The Edge version rides on its own constant
+          # instead, from the edge/about-edge-build-row branch.
+          stamp="packages/app/src/utils/edge-build.ts"
+          if [[ ! -f "$stamp" ]]; then
+            echo "::notice::$stamp is absent (branch retired?) — skipping the Edge build stamp"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const file = 'packages/app/src/utils/edge-build.ts';
+          const version = process.env.EDGE_VERSION;
+          if (!version) throw new Error('EDGE_VERSION env var is missing');
+
+          const placeholder = 'export const EDGE_BUILD_VERSION = "dev";';
+          const source = fs.readFileSync(file, 'utf8');
+          // Loud rather than silent: a renamed constant would otherwise ship a build that
+          // calls itself "dev" and hides the row it exists to render.
+          if (!source.includes(placeholder)) {
+            throw new Error(`${file} no longer contains ${placeholder}`);
+          }
+
+          fs.writeFileSync(
+            file,
+            source.replace(placeholder, `export const EDGE_BUILD_VERSION = "${version}";`),
+          );
+          NODE
+          grep -n 'EDGE_BUILD_VERSION' "$stamp"
+
+      - name: Build desktop release
+        shell: bash
+        env:
+          EP_GH_IGNORE_TIME: true
+          PASEO_DESKTOP_SMOKE: "1"
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
+        run: |
+          set -euo pipefail
+          # ${arch}/${ext}/${version} are electron-builder tokens — single-quote them so
+          # the shell leaves them alone. executableName stays "Paseo": after-pack.js and
+          # e2e/packaged-app-smoke.js hardcode it, and the smoke test is worth keeping.
+          #
+          # No deb/rpm packageName override here — that exists on the Linux job because
+          # rpmbuild rejects a Name tag containing a space. NSIS is happy with one, and
+          # takes "Paseo Edge" for the install directory, Start Menu entry and uninstall
+          # record. Those, and taskbar grouping, key off appId, which we override — so a
+          # stock Paseo and Edge stay separate on Windows without the desktop-entry
+          # workaround Linux needs.
+          #
+          # arm64 is packaged but not smoke-tested: after-pack.js skips the smoke when the
+          # build arch differs from the host's, and the runner is x64. Same as upstream.
+          npm run build:desktop -- --publish never --win --x64 --arm64 \
+            -c.appId=sh.paseo.desktop.edge \
+            -c.productName="Paseo Edge" \
+            -c.win.artifactName='Paseo-Edge-Setup-${version}-${arch}.${ext}' \
+            -c.publish.owner=josham \
+            -c.publish.repo=paseo \
+            -c.publish.releaseType=release \
+            -c.publish.channel=latest
+
+      - name: Upload packaged smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-windows-x64
+          path: ${{ runner.temp }}/desktop-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify the updater feed points at this fork
+        shell: bash
+        run: |
+          set -euo pipefail
+          # electron-builder bakes publish config into app-update.yml. If the -c overrides
+          # above ever stop applying, the build would silently update users to upstream.
+          feed="$(find "$DESKTOP_PACKAGE_PATH/release" -name app-update.yml -print -quit)"
+          if [[ -z "$feed" ]]; then
+            echo "::error::app-update.yml not found in the packaged output"
+            exit 1
+          fi
+          cat "$feed"
+          grep -q '^owner: josham$' "$feed" || { echo "::error::app-update.yml owner is not josham"; exit 1; }
+          grep -q '^repo: paseo$' "$feed" || { echo "::error::app-update.yml repo is not paseo"; exit 1; }
+
+      - name: Stamp instant rollout
+        shell: bash
+        run: |
+          set -euo pipefail
+          # latest.yml, not latest-linux.yml: that is the channel file electron-updater
+          # reads on Windows. The two never collide in one release.
+          #
+          # Calls the exported function rather than the CLI, which the Linux job uses.
+          # stamp-rollout.mjs guards its entrypoint with
+          #   import.meta.url === `file://${process.argv[1]}`
+          # and on Windows those never match — import.meta.url is file:///D:/a/... while
+          # argv[1] is D:\a\... — so `node scripts/stamp-rollout.mjs` would exit 0 having
+          # done nothing, and the miss is invisible. Absent rolloutHours already means
+          # "admit immediately" (app-update-rollout.ts), so a silent no-op would not break
+          # updates, which is exactly why it could sit here unnoticed.
+          node --input-type=module <<'NODE'
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+
+          const { stampRollout } = await import(
+            pathToFileURL(path.resolve("scripts/stamp-rollout.mjs")).href
+          );
+          stampRollout({ releaseDate: new Date().toISOString(), rolloutHours: 0 }, [
+            path.join(process.env.DESKTOP_PACKAGE_PATH, "release", "latest.yml"),
+          ]);
+          NODE
+          cat "$DESKTOP_PACKAGE_PATH/release/latest.yml"
+          grep -q '^rolloutHours: 0$' "$DESKTOP_PACKAGE_PATH/release/latest.yml" \
+            || { echo "::error::latest.yml was not stamped"; exit 1; }
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$EDGE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # The Linux job usually gets here first; this is the case where it failed or
+            # was never run. Racing it is harmless — one of the two loses and the notes
+            # are the same either way.
+            gh release create "$EDGE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Paseo Edge $EDGE_VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              || echo "Release creation raced with another build; continuing."
+          fi
+
+          # Named rather than globbed for *: the release dir also holds the unpacked
+          # win-unpacked/ trees and latest-linux.yml would never be here, but builder
+          # debug output and .yaml leftovers would sweep in under a bare find.
+          release_dir="$DESKTOP_PACKAGE_PATH/release"
+          files=()
+          while IFS= read -r -d '' f; do
+            files+=("$f")
+          done < <(find "$release_dir" -maxdepth 1 -type f \
+            \( -name '*.exe' -o -name '*.exe.blockmap' -o -name '*.zip' -o -name 'latest.yml' \) \
+            -print0 | sort -z)
+
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::No release artifacts found in $release_dir"
+            exit 1
+          fi
+          printf 'uploading %s\n' "${files[@]}"
+          gh release upload "$EDGE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
