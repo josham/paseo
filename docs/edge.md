@@ -440,6 +440,24 @@ gh api -X PUT repos/josham/paseo/actions/workflows/deploy-website.yml/disable
 That endpoint 404s on a workflow GitHub has not registered, which is why it could not be
 used pre-emptively on the rest.
 
+### Getting a new workflow its first run
+
+`workflow_dispatch` is only offered for workflows GitHub has registered, and it registers
+them from the **default branch** — here a mirror of upstream, which we never commit to. So
+a workflow added on `edge/tooling` cannot be dispatched until it has run at least once:
+
+```
+HTTP 404: workflow edge-windows-release.yml not found on the default branch
+```
+
+A `push` trigger has no such requirement and fires from any branch. Bootstrap a new
+workflow by adding a temporary `push: branches: [...]` trigger on a throwaway branch,
+along with whatever guard keeps that run from publishing, and pushing it. The run
+registers the workflow by its path; afterwards `gh workflow run --ref <any-branch>` works
+and the branch and its scaffolding can be deleted. That is how the Windows job was proved
+against `edge-v1.6.1` before any tag carried it. The Linux and Android jobs got there the
+slower way, on their first real tag.
+
 Linux x64, Windows x64/arm64 and Android arm64 are built. macOS is the one that is left:
 it needs an Apple Developer certificate to produce something users can open without
 fighting Gatekeeper, and iOS cannot be sideloaded at all without one.
