@@ -162,6 +162,7 @@ export const ja: TranslationResources = {
       freshDraft: "このエージェントをアーカイブして新しい下書きを開始",
     },
     promptHistory: {
+      open: "プロンプト履歴を検索",
       unsupported: "プロンプト履歴を検索するにはホストを更新してください",
       emptyHistory: "このプロジェクトではまだプロンプトを送信していません",
       noMatches: "一致するプロンプトはありません",

@@ -164,6 +164,7 @@ export const fr: TranslationResources = {
       freshDraft: "Archivez cet agent et démarrez un nouveau brouillon",
     },
     promptHistory: {
+      open: "Rechercher dans l'historique des prompts",
       unsupported: "Mettez à jour l'hôte pour rechercher dans l'historique des prompts",
       emptyHistory: "Aucun prompt envoyé dans ce projet pour l'instant",
       noMatches: "Aucun prompt correspondant",

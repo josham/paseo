@@ -162,6 +162,7 @@ export const ko: TranslationResources = {
       freshDraft: "이 에이전트를 보관하고 새 초안을 시작합니다",
     },
     promptHistory: {
+      open: "프롬프트 기록 검색",
       unsupported: "프롬프트 기록을 검색하려면 호스트를 업데이트하세요",
       emptyHistory: "이 프로젝트에서 아직 보낸 프롬프트가 없습니다",
       noMatches: "일치하는 프롬프트가 없습니다",

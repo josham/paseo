@@ -162,6 +162,7 @@ export const ru: TranslationResources = {
       freshDraft: "Архивировать этого агента и создать новый черновик",
     },
     promptHistory: {
+      open: "Поиск по истории запросов",
       unsupported: "Обновите хост, чтобы искать в истории запросов",
       emptyHistory: "В этом проекте ещё не отправлено ни одного запроса",
       noMatches: "Подходящих запросов нет",

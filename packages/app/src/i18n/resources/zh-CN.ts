@@ -162,6 +162,7 @@ export const zhCN: TranslationResources = {
       freshDraft: "归档此 Agent 并开始新的草稿",
     },
     promptHistory: {
+      open: "搜索提示词历史",
       unsupported: "请更新主机以搜索提示词历史",
       emptyHistory: "此项目中尚未发送任何提示词",
       noMatches: "没有匹配的提示词",

@@ -162,6 +162,7 @@ export const ptBR: TranslationResources = {
       freshDraft: "Arquivar este agente e iniciar um novo rascunho",
     },
     promptHistory: {
+      open: "Pesquisar histórico de prompts",
       unsupported: "Atualize o host para pesquisar o histórico de prompts",
       emptyHistory: "Nenhum prompt enviado neste projeto ainda",
       noMatches: "Nenhum prompt correspondente",

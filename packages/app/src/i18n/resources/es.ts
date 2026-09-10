@@ -162,6 +162,7 @@ export const es: TranslationResources = {
       freshDraft: "Archive este agente y comience un nuevo borrador",
     },
     promptHistory: {
+      open: "Buscar en el historial de prompts",
       unsupported: "Actualiza el host para buscar en el historial de prompts",
       emptyHistory: "Todavía no se han enviado prompts en este proyecto",
       noMatches: "No hay prompts coincidentes",

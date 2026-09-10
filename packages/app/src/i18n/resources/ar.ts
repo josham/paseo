@@ -162,6 +162,7 @@ export const ar: TranslationResources = {
       freshDraft: "أرشفة هذا الوكيل وابدأ مسودة جديدة",
     },
     promptHistory: {
+      open: "البحث في سجل المطالبات",
       unsupported: "حدّث المضيف للبحث في سجل المطالبات",
       emptyHistory: "لم تُرسَل أي مطالبات في هذا المشروع بعد",
       noMatches: "لا توجد مطالبات مطابقة",

@@ -108,6 +108,7 @@ import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispat
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { submitAgentInput } from "@/composer/submit";
 import { recordPromptHistory, usePromptHistory } from "@/composer/history/store";
+import { PromptHistoryButton } from "@/composer/history/button";
 import { usePromptHistorySearch } from "@/composer/history/use-prompt-history-search";
 import { usePromptRecall } from "@/composer/history/use-prompt-recall";
 import { useWorkspaceFields } from "@/stores/session-store-hooks";
@@ -2204,6 +2205,29 @@ function ComposerContentImpl({
     ],
   );
 
+  /**
+   * Ctrl+R is unreachable without a physical keyboard, and React Native's native
+   * key events carry no modifier flags, so touch surfaces get a button instead.
+   * Compact web is included: a phone browser has neither.
+   */
+  const showPromptHistoryButton =
+    (isNative || isCompactLayout) && mode.showAttachments && promptHistory.status !== "unsupported";
+  const openPromptHistorySearch = promptHistorySearch.open;
+  const handlePromptHistoryPress = useCallback(() => {
+    openPromptHistorySearch();
+  }, [openPromptHistorySearch]);
+  const afterAttachContent = useMemo(
+    () =>
+      showPromptHistoryButton ? (
+        <PromptHistoryButton
+          onPress={handlePromptHistoryPress}
+          disabled={!isConnected || readOnly}
+          iconSize={buttonIconSize}
+        />
+      ) : null,
+    [buttonIconSize, handlePromptHistoryPress, isConnected, readOnly, showPromptHistoryButton],
+  );
+
   const leftContent = useMemo(
     () =>
       renderLeftContent({
@@ -2427,6 +2451,7 @@ function ComposerContentImpl({
                   autoFocus={messageInputAutoFocus}
                   autoFocusKey={`${serverId}:${agentId}:${autoFocusKey ?? ""}`}
                   disabled={isSubmitLoading}
+                  afterAttachContent={afterAttachContent}
                   leftContent={leftContent}
                   beforeVoiceContent={beforeVoiceContent}
                   rightContent={rightContent}
