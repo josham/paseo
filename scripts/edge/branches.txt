@@ -27,6 +27,7 @@ edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, 
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
 fix/navigator-polyfill-before-routes  # navigator polyfill runs before route modules, so Android release builds start (no upstream PR yet)
 edge/prompt-history  # Composer prompt recall — ArrowUp and Ctrl+R fuzzy search over a per-project daemon store (fork-only, never upstreamed)
+fix/explorer-symlink-entries  # Symlinked directories open, and links the workspace boundary will not follow are shown with a reason rather than dropped (no upstream PR yet)
 pr/3723-appimage-launcher  # AppImage gets --no-sandbox on argv (#3723, open, mvanhorn)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (#2597, closed upstream, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (#2452, closed upstream, bendavid)
