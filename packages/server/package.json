@@ -23,6 +23,11 @@
       "source": "./src/utils/tool-call-parsers.ts",
       "default": "./dist/server/utils/tool-call-parsers.js"
     },
+    "./ssh": {
+      "types": "./dist/server/ssh/index.d.ts",
+      "source": "./src/ssh/index.ts",
+      "default": "./dist/server/ssh/index.js"
+    },
     "./agent-hooks": {
       "types": "./dist/server/terminal/agent-hooks/provider-registry.d.ts",
       "source": "./src/terminal/agent-hooks/provider-registry.ts",

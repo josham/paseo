@@ -1702,6 +1702,20 @@ export const ru: TranslationResources = {
         invalidTarget: "Укажите корректный хост ssh://",
         failedToConnect: "Не удалось подключиться по SSH. {{detail}}",
       },
+      install: {
+        label: "Установить и запустить Paseo на этом хосте",
+        helper: "Paseo установится в ~/.paseo на удалённом хосте и запустит там демон.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "Пароль SSH",
+        confirm: "Проверьте ключ узла SSH",
+        passphrase: "Парольная фраза ключа SSH",
+        secret: "Секрет",
+        cancel: "Отмена",
+        submit: "Подключиться",
+      },
     },
     link: {
       title: "Вставить ссылку для сопряжения",
@@ -2371,6 +2385,12 @@ export const ru: TranslationResources = {
         relay: "Ретранслятор",
         local: "Локальный",
         remoteSsh: "Удалённый SSH",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} требует пароль или подтверждение ключа хоста. Paseo запрашивает их только при подключении, поэтому не отвлекает вас в фоновом режиме.",
+        connect: "Подключиться",
+        connecting: "Подключение…",
       },
       connections: {
         title: "Подключения",

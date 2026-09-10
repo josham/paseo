@@ -1705,6 +1705,20 @@ export const ptBR: TranslationResources = {
         invalidTarget: "Insira um host ssh:// válido",
         failedToConnect: "Não foi possível conectar por SSH. {{detail}}",
       },
+      install: {
+        label: "Instalar e iniciar o Paseo neste host",
+        helper: "O Paseo se instala em ~/.paseo no host remoto e inicia o daemon lá.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "Senha SSH",
+        confirm: "Verificar a chave do host SSH",
+        passphrase: "Frase secreta da chave SSH",
+        secret: "Segredo",
+        cancel: "Cancelar",
+        submit: "Conectar",
+      },
     },
     link: {
       title: "Colar link de pareamento",
@@ -2368,6 +2382,12 @@ export const ptBR: TranslationResources = {
         relay: "Relay",
         local: "Local",
         remoteSsh: "SSH remoto",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} precisa de uma senha ou da confirmação de uma chave de host. O Paseo só pede quando você conecta, então não vai interromper você em segundo plano.",
+        connect: "Conectar",
+        connecting: "Conectando…",
       },
       connections: {
         title: "Conexões",

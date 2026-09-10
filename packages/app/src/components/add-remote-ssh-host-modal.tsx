@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Terminal } from "lucide-react-native";
+import { Check, Terminal } from "lucide-react-native";
 import { parseSshTransportUri } from "@getpaseo/protocol/ssh-transport";
 import type { HostProfile } from "@/types/host-connection";
 import { useHostMutations, useHosts } from "@/runtime/host-runtime";
@@ -11,10 +11,14 @@ import { Field, FormTextInput } from "@/components/ui/form-field";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { DaemonConnectionTestError } from "@/utils/test-daemon-connection";
+import { grantSshPrompt } from "@/desktop/daemon/ssh-prompt-grant";
 import { AdaptiveModalSheet, type SheetHeader } from "./adaptive-modal-sheet";
 
 const FLEX_ONE_STYLE = { flex: 1 } as const;
 const ThemedTerminal = withUnistyles(Terminal);
+const ThemedCheck = withUnistyles(Check, (theme) => ({
+  color: theme.colors.accentForeground,
+}));
 
 const styles = StyleSheet.create((theme) => ({
   helper: {
@@ -25,6 +29,30 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     gap: theme.spacing[3],
     marginTop: theme.spacing[2],
+  },
+  installRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[3],
+    marginTop: theme.spacing[2],
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkboxChecked: {
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
+  },
+  installLabel: {
+    flex: 1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
   },
 }));
 
@@ -53,12 +81,14 @@ export function AddRemoteSshHostModal({
   const targetRef = useRef("");
   const inputRef = useRef<EditingTextInputHandle>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [installRemote, setInstallRemote] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const header = useMemo<SheetHeader>(() => ({ title: t("pairing.remoteSsh.title") }), [t]);
 
   const clear = useCallback(() => {
     targetRef.current = "";
     inputRef.current?.replaceText("");
+    setInstallRemote(false);
     setErrorMessage("");
   }, []);
 
@@ -89,11 +119,23 @@ export function AddRemoteSshHostModal({
       setErrorMessage(t("pairing.remoteSsh.errors.invalidTarget"));
       return;
     }
+    // The checkbox is the same opt-in as `?install=1` in the URI; either one
+    // is the explicit ask that lets Paseo touch the remote host.
+    if (installRemote && !target.remoteDaemon) {
+      target = { ...target, remoteDaemon: {} };
+    }
 
     let result: Awaited<ReturnType<typeof probeAndUpsertRemoteSshConnection>>;
     try {
       setIsSaving(true);
       setErrorMessage("");
+      // Pressing Connect is the ask that lets SSH raise a password or host-key
+      // question; without this the probe below authenticates with keys or
+      // fails.
+      await grantSshPrompt({
+        host: target.host,
+        remoteSetup: target.remoteDaemon !== undefined,
+      });
       result = await probeAndUpsertRemoteSshConnection(target);
     } catch (error) {
       const message =
@@ -112,7 +154,25 @@ export function AddRemoteSshHostModal({
       ...result,
       isNewHost: !hosts.some((profile) => profile.serverId === result.serverId),
     });
-  }, [clear, hosts, isSaving, onClose, onSaved, probeAndUpsertRemoteSshConnection, t]);
+  }, [
+    clear,
+    hosts,
+    installRemote,
+    isSaving,
+    onClose,
+    onSaved,
+    probeAndUpsertRemoteSshConnection,
+    t,
+  ]);
+  const handleToggleInstall = useCallback(() => setInstallRemote((value) => !value), []);
+  const checkboxStyle = useMemo(
+    () => [styles.checkbox, installRemote ? styles.checkboxChecked : null],
+    [installRemote],
+  );
+  const installAccessibilityState = useMemo(
+    () => ({ checked: installRemote, disabled: isSaving }),
+    [installRemote, isSaving],
+  );
   const handleTargetChange = useCallback((value: string) => {
     targetRef.current = value;
   }, []);
@@ -146,6 +206,25 @@ export function AddRemoteSshHostModal({
           onSubmitEditing={handleSubmit}
         />
       </Field>
+      <Pressable
+        style={styles.installRow}
+        onPress={handleToggleInstall}
+        disabled={isSaving}
+        accessibilityRole="checkbox"
+        accessibilityLabel={t("pairing.remoteSsh.install.label")}
+        accessibilityState={installAccessibilityState}
+        testID="remote-ssh-install-toggle"
+      >
+        <View style={checkboxStyle}>
+          {installRemote ? (
+            <View testID="remote-ssh-install-toggle-checked">
+              <ThemedCheck size={14} />
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.installLabel}>{t("pairing.remoteSsh.install.label")}</Text>
+      </Pressable>
+      <Text style={styles.helper}>{t("pairing.remoteSsh.install.helper")}</Text>
       <View style={styles.actions}>
         <Button
           style={FLEX_ONE_STYLE}

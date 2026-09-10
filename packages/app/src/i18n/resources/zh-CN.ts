@@ -1656,6 +1656,20 @@ export const zhCN: TranslationResources = {
         invalidTarget: "请输入有效的 ssh:// 主机",
         failedToConnect: "无法通过 SSH 连接。{{detail}}",
       },
+      install: {
+        label: "在此主机上安装并启动 Paseo",
+        helper: "Paseo 会安装到远程主机的 ~/.paseo 并在那里启动守护进程。",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "SSH 密码",
+        confirm: "验证 SSH 主机密钥",
+        passphrase: "SSH 密钥口令",
+        secret: "机密",
+        cancel: "取消",
+        submit: "连接",
+      },
     },
     link: {
       title: "粘贴配对链接",
@@ -2306,6 +2320,12 @@ export const zhCN: TranslationResources = {
         relay: "Relay",
         local: "本地",
         remoteSsh: "远程 SSH",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} 需要密码或确认主机密钥。Paseo 仅在你连接时询问，因此不会在后台打断你。",
+        connect: "连接",
+        connecting: "连接中…",
       },
       connections: {
         title: "连接",
