@@ -1820,6 +1820,13 @@ export const ja: TranslationResources = {
       tooLargeToDisplay: "このファイルは大きすぎて表示できません",
       failedToLoad: "ファイルの読み込みに失敗しました",
       failedToLoadPreview: "ファイルプレビューの読み込みに失敗しました",
+      pdf: {
+        title: "PDFプレビュー",
+        loading: "PDFを描画中...",
+        failed: "このPDFを描画できませんでした",
+        unsupportedPlatform: "このプラットフォームではPDFプレビューはまだ利用できません",
+        hostUpdateRequired: "PDFをプレビューするにはホストを更新してください",
+      },
       editor: {
         fileSize: "ファイルサイズ {{size}}",
         lines: "{{count}} 行",
