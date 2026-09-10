@@ -2638,6 +2638,8 @@ const FileExplorerEntrySchema = z.object({
   kind: z.enum(["file", "directory"]),
   size: z.number(),
   modifiedAt: z.string(),
+  isSymlink: z.boolean().optional(),
+  unavailable: z.enum(["outside-workspace", "broken-link"]).optional(),
 });
 
 const FileExplorerFileSchema = z.object({

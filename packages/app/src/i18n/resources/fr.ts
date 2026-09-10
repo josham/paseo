@@ -463,6 +463,11 @@ export const fr: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "Lien symbolique",
+        outsideWorkspace: "hors de l'espace de travail",
+        broken: "cible introuvable",
+      },
       sort: {
         name: "Nom",
         modified: "Modifié",

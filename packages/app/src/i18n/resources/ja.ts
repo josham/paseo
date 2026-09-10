@@ -463,6 +463,11 @@ export const ja: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "シンボリックリンク",
+        outsideWorkspace: "ワークスペース外",
+        broken: "リンク先がありません",
+      },
       sort: {
         name: "名前",
         modified: "更新日時",

@@ -463,6 +463,11 @@ export const ptBR: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "Link simbólico",
+        outsideWorkspace: "fora do espaço de trabalho",
+        broken: "destino ausente",
+      },
       sort: {
         name: "Nome",
         modified: "Modificado",
