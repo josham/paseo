@@ -161,6 +161,12 @@ export const es: TranslationResources = {
       archiveAgent: "Archivar el agente actual",
       freshDraft: "Archive este agente y comience un nuevo borrador",
     },
+    promptHistory: {
+      open: "Buscar en el historial de prompts",
+      unsupported: "Actualiza el host para buscar en el historial de prompts",
+      emptyHistory: "Todavía no se han enviado prompts en este proyecto",
+      noMatches: "No hay prompts coincidentes",
+    },
     github: {
       searching: "Búsqueda...",
       noResults: "No se encontraron resultados.",
@@ -2278,6 +2284,7 @@ export const es: TranslationResources = {
         toggleFocusMode: "Alternar modo de enfoque",
         cycleTheme: "Tema del ciclo",
         focusMessageInput: "Entrada de mensaje de enfoque",
+        searchPromptHistory: "Buscar en el historial de prompts",
         cycleAgentMode: "Alternar modo del agente",
         toggleVoiceMode: "Alternar modo de voz",
         startStopDictation: "Iniciar dictado/stop",

@@ -161,6 +161,12 @@ export const zhCN: TranslationResources = {
       archiveAgent: "归档当前 Agent",
       freshDraft: "归档此 Agent 并开始新的草稿",
     },
+    promptHistory: {
+      open: "搜索提示词历史",
+      unsupported: "请更新主机以搜索提示词历史",
+      emptyHistory: "此项目中尚未发送任何提示词",
+      noMatches: "没有匹配的提示词",
+    },
     github: {
       searching: "正在搜索...",
       noResults: "没有结果。",
@@ -2199,6 +2205,7 @@ export const zhCN: TranslationResources = {
         toggleFocusMode: "切换专注模式",
         cycleTheme: "循环切换主题",
         focusMessageInput: "聚焦消息输入框",
+        searchPromptHistory: "搜索提示词历史",
         cycleAgentMode: "循环切换代理模式",
         toggleVoiceMode: "切换语音模式",
         startStopDictation: "开始/停止听写",

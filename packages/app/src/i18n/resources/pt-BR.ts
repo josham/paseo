@@ -161,6 +161,12 @@ export const ptBR: TranslationResources = {
       archiveAgent: "Arquivar o agente atual",
       freshDraft: "Arquivar este agente e iniciar um novo rascunho",
     },
+    promptHistory: {
+      open: "Pesquisar histórico de prompts",
+      unsupported: "Atualize o host para pesquisar o histórico de prompts",
+      emptyHistory: "Nenhum prompt enviado neste projeto ainda",
+      noMatches: "Nenhum prompt correspondente",
+    },
     github: {
       searching: "Buscando...",
       noResults: "Nenhum resultado encontrado.",
@@ -2260,6 +2266,7 @@ export const ptBR: TranslationResources = {
         toggleFocusMode: "Alternar modo de foco",
         cycleTheme: "Alternar tema",
         focusMessageInput: "Focar entrada de mensagem",
+        searchPromptHistory: "Pesquisar histórico de prompts",
         cycleAgentMode: "Alternar modo do agente",
         toggleVoiceMode: "Alternar modo de voz",
         startStopDictation: "Iniciar/parar ditado",

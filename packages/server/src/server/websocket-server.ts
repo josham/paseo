@@ -1,4 +1,5 @@
 import { AgentRequests } from "./agent/requests/index.js";
+import { createPromptHistoryFile, PromptHistoryStore } from "./prompt-history/store.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
@@ -548,6 +549,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly agentManager: AgentManager;
   private readonly agentStorage: AgentStorage;
   private readonly agentRequests: AgentRequests;
+  private readonly promptHistory: PromptHistoryStore;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
   private readonly workspaceLabelService: WorkspaceLabelService | null;
@@ -669,6 +671,10 @@ export class VoiceAssistantWebSocketServer {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.agentRequests = new AgentRequests(join(paseoHome, "agent-requests"));
+    this.promptHistory = new PromptHistoryStore({
+      file: createPromptHistoryFile(join(paseoHome, "prompt-history.json")),
+      onError: (error, message) => this.logger.warn({ err: error }, message),
+    });
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();
     this.workspaceLabelService = workspaceLabelService ?? null;
@@ -1415,6 +1421,7 @@ export class VoiceAssistantWebSocketServer {
       agentRequests: this.agentRequests,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
+      promptHistory: this.promptHistory,
       workspaceLabelService: this.workspaceLabelService ?? undefined,
       directorySync: this.directorySync,
       scheduleService: this.scheduleService,
@@ -1633,6 +1640,8 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         agentRequestReceipts: true,
+        // COMPAT(promptHistory): added in v0.8.0; remove gate after 2027-03-10.
+        promptHistory: true,
         hubAgentRpc: true,
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
         directorySync: true,

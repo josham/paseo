@@ -163,6 +163,12 @@ export const fr: TranslationResources = {
       archiveAgent: "Archiver l'agent actuel",
       freshDraft: "Archivez cet agent et démarrez un nouveau brouillon",
     },
+    promptHistory: {
+      open: "Rechercher dans l'historique des prompts",
+      unsupported: "Mettez à jour l'hôte pour rechercher dans l'historique des prompts",
+      emptyHistory: "Aucun prompt envoyé dans ce projet pour l'instant",
+      noMatches: "Aucun prompt correspondant",
+    },
     github: {
       searching: "Recherche...",
       noResults: "Aucun résultat trouvé.",
@@ -2281,6 +2287,7 @@ export const fr: TranslationResources = {
         toggleFocusMode: "Basculer le mode de mise au point",
         cycleTheme: "Thème du cycle",
         focusMessageInput: "Saisie du message de focus",
+        searchPromptHistory: "Rechercher dans l'historique des prompts",
         cycleAgentMode: "Parcourir les modes de l'agent",
         toggleVoiceMode: "Changer le mode vocal",
         startStopDictation: "Démarrer la dictée/stop",

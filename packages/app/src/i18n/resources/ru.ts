@@ -161,6 +161,12 @@ export const ru: TranslationResources = {
       archiveAgent: "Архивировать текущего агента",
       freshDraft: "Архивировать этого агента и создать новый черновик",
     },
+    promptHistory: {
+      open: "Поиск по истории запросов",
+      unsupported: "Обновите хост, чтобы искать в истории запросов",
+      emptyHistory: "В этом проекте ещё не отправлено ни одного запроса",
+      noMatches: "Подходящих запросов нет",
+    },
     github: {
       searching: "Идет поиск...",
       noResults: "Результаты не найдены.",
@@ -2264,6 +2270,7 @@ export const ru: TranslationResources = {
         toggleFocusMode: "Переключить режим фокусировки",
         cycleTheme: "Переключить тему",
         focusMessageInput: "Перейти к полю ввода сообщения",
+        searchPromptHistory: "Поиск по истории запросов",
         cycleAgentMode: "Переключить режим агента",
         toggleVoiceMode: "Переключить голосовой режим",
         startStopDictation: "Начать/остановить диктовку",

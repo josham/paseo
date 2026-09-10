@@ -161,6 +161,12 @@ export const ja: TranslationResources = {
       archiveAgent: "現在のエージェントをアーカイブ",
       freshDraft: "このエージェントをアーカイブして新しい下書きを開始",
     },
+    promptHistory: {
+      open: "プロンプト履歴を検索",
+      unsupported: "プロンプト履歴を検索するにはホストを更新してください",
+      emptyHistory: "このプロジェクトではまだプロンプトを送信していません",
+      noMatches: "一致するプロンプトはありません",
+    },
     github: {
       searching: "検索中...",
       noResults: "結果が見つかりません。",
@@ -2244,6 +2250,7 @@ export const ja: TranslationResources = {
         toggleFocusMode: "フォーカスモードを切り替え",
         cycleTheme: "テーマを順に切り替え",
         focusMessageInput: "メッセージ入力にフォーカス",
+        searchPromptHistory: "プロンプト履歴を検索",
         cycleAgentMode: "エージェントモードを順に切り替え",
         toggleVoiceMode: "音声モードを切り替え",
         startStopDictation: "音声入力を開始/停止",
