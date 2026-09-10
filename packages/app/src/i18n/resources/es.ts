@@ -469,6 +469,11 @@ export const es: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "Enlace simbólico",
+        outsideWorkspace: "fuera del espacio de trabajo",
+        broken: "destino no encontrado",
+      },
       sort: {
         name: "Nombre",
         modified: "Modificado",

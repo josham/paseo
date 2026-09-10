@@ -468,6 +468,11 @@ export const ru: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "Символьная ссылка",
+        outsideWorkspace: "вне рабочего пространства",
+        broken: "цель отсутствует",
+      },
       sort: {
         name: "Имя",
         modified: "Дата изменения",

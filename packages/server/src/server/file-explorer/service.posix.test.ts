@@ -12,7 +12,7 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 describe.skipIf(isPlatform("win32"))("service POSIX-only", () => {
-  it("lists directory entries even when a dangling symlink exists", async () => {
+  it("lists a dangling symlink as an unopenable entry", async () => {
     const root = await createTempDir("paseo-file-explorer-");
 
     try {
@@ -29,7 +29,8 @@ describe.skipIf(isPlatform("win32"))("service POSIX-only", () => {
       expect(result.path).toBe("packages/server");
       const names = result.entries.map((entry) => entry.name);
       expect(names).toContain("README.md");
-      expect(names).not.toContain("AGENTS.md");
+      const dangling = result.entries.find((entry) => entry.name === "AGENTS.md");
+      expect(dangling).toMatchObject({ isSymlink: true, unavailable: "broken-link", size: 0 });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -56,7 +57,7 @@ describe.skipIf(isPlatform("win32"))("service POSIX-only", () => {
     }
   });
 
-  it("skips listed symlink entries that resolve outside the workspace", async () => {
+  it("lists symlink entries that resolve outside the workspace as unopenable", async () => {
     const root = await createTempDir("paseo-file-explorer-");
     const outsideRoot = await createTempDir("paseo-file-explorer-outside-");
 
@@ -70,7 +71,93 @@ describe.skipIf(isPlatform("win32"))("service POSIX-only", () => {
 
       const names = result.entries.map((entry) => entry.name);
       expect(names).toContain("visible.txt");
-      expect(names).not.toContain("secret-link.txt");
+      const blocked = result.entries.find((entry) => entry.name === "secret-link.txt");
+      // The name is already inside the workspace, but nothing about the target
+      // may cross the boundary: no size, and reading it still throws.
+      expect(blocked).toMatchObject({ isSymlink: true, unavailable: "outside-workspace", size: 0 });
+      await expect(readExplorerFile({ root, relativePath: "secret-link.txt" })).rejects.toThrow(
+        "Access outside of workspace is not allowed",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("lists a symlinked directory inside the workspace as a directory", async () => {
+    const root = await createTempDir("paseo-file-explorer-");
+
+    try {
+      await mkdir(path.join(root, "packages"));
+      await writeFile(path.join(root, "packages", "index.ts"), "export {};\n", "utf-8");
+      await symlink("packages", path.join(root, "packages-link"), "dir");
+
+      const result = await listDirectoryEntries({ root });
+
+      const link = result.entries.find((entry) => entry.name === "packages-link");
+      expect(link).toMatchObject({ kind: "directory", isSymlink: true });
+      expect(link?.unavailable).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("navigates into a symlinked directory using the link's path", async () => {
+    const root = await createTempDir("paseo-file-explorer-");
+
+    try {
+      await mkdir(path.join(root, "packages"));
+      await writeFile(path.join(root, "packages", "index.ts"), "export {};\n", "utf-8");
+      await symlink("packages", path.join(root, "packages-link"), "dir");
+
+      const result = await listDirectoryEntries({ root, relativePath: "packages-link" });
+
+      expect(result.path).toBe("packages-link");
+      expect(result.entries.map((entry) => entry.path)).toEqual(["packages-link/index.ts"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks an in-workspace file symlink without making it unavailable", async () => {
+    const root = await createTempDir("paseo-file-explorer-");
+
+    try {
+      await writeFile(path.join(root, "real.txt"), "real\n", "utf-8");
+      await symlink("real.txt", path.join(root, "real-link.txt"));
+
+      const result = await listDirectoryEntries({ root });
+
+      expect(result.entries.find((entry) => entry.name === "real.txt")?.isSymlink).toBeUndefined();
+      expect(result.entries.find((entry) => entry.name === "real-link.txt")).toMatchObject({
+        kind: "file",
+        isSymlink: true,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists a symlink that resolves outside the workspace as a directory-free placeholder", async () => {
+    const root = await createTempDir("paseo-file-explorer-");
+    const outsideRoot = await createTempDir("paseo-file-explorer-outside-");
+
+    try {
+      await mkdir(path.join(outsideRoot, "secrets"));
+      await symlink(path.join(outsideRoot, "secrets"), path.join(root, "secrets-link"), "dir");
+
+      const result = await listDirectoryEntries({ root });
+
+      // Reported as a file even though the target is a directory: calling it a
+      // directory would invite the client to try to expand it.
+      expect(result.entries.find((entry) => entry.name === "secrets-link")).toMatchObject({
+        kind: "file",
+        isSymlink: true,
+        unavailable: "outside-workspace",
+      });
+      await expect(listDirectoryEntries({ root, relativePath: "secrets-link" })).rejects.toThrow(
+        "Access outside of workspace is not allowed",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(outsideRoot, { recursive: true, force: true });
