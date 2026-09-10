@@ -103,6 +103,43 @@ test("Ctrl+R fuzzy-searches sent prompts and puts the chosen one in the composer
   }
 });
 
+// A phone browser has no Ctrl and no arrow keys, so the toolbar button is the
+// only way in. Seeding happens at desktop width first because compact web sends
+// with the button, not with Enter.
+const COMPACT_VIEWPORT = { width: 390, height: 844 };
+
+test("a compact viewport gets a toolbar button that opens prompt search", async ({ page }) => {
+  const { workspace } = await seedComposerWithHistory(page);
+  try {
+    await page.setViewportSize(COMPACT_VIEWPORT);
+
+    const historyButton = page.getByTestId("message-input-prompt-history-button");
+    await expect(historyButton).toBeVisible({ timeout: 10_000 });
+
+    await historyButton.click();
+
+    const popover = page.getByTestId("composer-prompt-history-popover");
+    await expect(popover).toBeVisible({ timeout: 10_000 });
+
+    // Tap a row: the whole path has to work without a keyboard.
+    await popover.getByText(FIRST_PROMPT).click();
+
+    await expect(popover).toHaveCount(0);
+    await expectComposerDraft(page, FIRST_PROMPT);
+  } finally {
+    await workspace.cleanup();
+  }
+});
+
+test("a desktop viewport keeps the toolbar button out of the way", async ({ page }) => {
+  const { workspace } = await seedComposerWithHistory(page);
+  try {
+    await expect(page.getByTestId("message-input-prompt-history-button")).toHaveCount(0);
+  } finally {
+    await workspace.cleanup();
+  }
+});
+
 test("Escape leaves the composer exactly as prompt search found it", async ({ page }) => {
   const { workspace } = await seedComposerWithHistory(page);
   try {
