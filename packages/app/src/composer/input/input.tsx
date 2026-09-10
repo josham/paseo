@@ -157,6 +157,8 @@ export interface MessageInputProps {
   disabled?: boolean;
   /** Content to render on the left side of the composer toolbar (e.g., AgentControls) */
   leftContent?: React.ReactNode;
+  /** Content to render immediately after the attachment button (e.g., prompt history) */
+  afterAttachContent?: React.ReactNode;
   /** Content to render on the right side before the voice button (e.g., context window meter) */
   beforeVoiceContent?: React.ReactNode;
   /** Auxiliary content to render on the right side after the voice button. */
@@ -1113,6 +1115,7 @@ interface ResolvedMessageInputProps {
   autoFocusKey: string | undefined;
   disabled: boolean;
   leftContent: React.ReactNode;
+  afterAttachContent: React.ReactNode;
   beforeVoiceContent: React.ReactNode;
   rightContent: React.ReactNode;
   activeActionContent: React.ReactNode;
@@ -1160,6 +1163,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     autoFocusKey: props.autoFocusKey,
     disabled: props.disabled ?? false,
     leftContent: props.leftContent,
+    afterAttachContent: props.afterAttachContent,
     beforeVoiceContent: props.beforeVoiceContent,
     rightContent: props.rightContent,
     activeActionContent: props.activeActionContent,
@@ -1237,6 +1241,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       autoFocusKey,
       disabled,
       leftContent,
+      afterAttachContent,
       beforeVoiceContent,
       rightContent,
       activeActionContent,
@@ -2077,6 +2082,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               attachmentMenuItems={attachmentMenuItems}
               addAttachmentLabel={t("composer.input.addAttachment")}
             />
+            {afterAttachContent}
             {leftContent}
           </View>
 
@@ -2109,6 +2115,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         attachmentMenuItems,
         t,
         leftContent,
+        afterAttachContent,
         beforeVoiceContent,
         mode.showVoice,
         handleVoicePress,
