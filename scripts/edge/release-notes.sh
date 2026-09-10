@@ -35,7 +35,7 @@ subjects="$(git log --first-parent --format=%s HEAD)"
 ours="$(awk '/^edge: /{n++; next} {exit} END{print n+0}' <<<"$subjects")"
 base="$(git rev-parse --short "HEAD~${ours}")"
 
-echo "Linux desktop and Android builds of Paseo Edge — a modified build of Paseo maintained at"
+echo "Linux, Windows and Android builds of Paseo Edge — a modified build of Paseo maintained at"
 echo "[josham/paseo](https://github.com/josham/paseo). Not affiliated with or endorsed by getpaseo."
 echo
 echo "Based on upstream \`getpaseo/paseo@$base\`, plus:"
@@ -61,6 +61,11 @@ echo "**Linux** — \`Paseo-Edge-x86_64.AppImage\` installs alongside a stock Pa
 echo "and desktop entry) and updates itself from this repo's releases."
 echo "\`paseo-edge-daemon-$version.tar.gz\` is the daemon built from the same commit; install it"
 echo "with \`scripts/edge/install-daemon.sh\` or the branches' server halves are missing without an error."
+echo
+echo "**Windows** — \`Paseo-Edge-Setup-$version-x64.exe\` (and an \`-arm64\` build) installs alongside"
+echo "a stock Paseo under its own app id, and updates itself from this repo's releases. The"
+echo "installer is unsigned, so SmartScreen will warn on first run — the same as upstream's."
+echo "It carries its own daemon, so unlike the Linux build there is nothing else to install."
 echo
 echo "**Android** — \`paseo-edge-android-arm64.apk\` is a sideload for arm64 devices, signed with"
 echo "the Edge key. It installs alongside a stock Paseo (\`sh.paseo.edge\`) and does not update"

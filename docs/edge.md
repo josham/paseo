@@ -1,8 +1,9 @@
 # Paseo Edge
 
-Paseo Edge is this fork's own Linux desktop build: upstream `getpaseo/paseo` plus the
-branches we have in flight, packaged as an AppImage you can install and that updates
-itself. It exists so we can run our own changes without waiting for upstream review.
+Paseo Edge is this fork's own build: upstream `getpaseo/paseo` plus the branches we have
+in flight, packaged for Linux (an AppImage), Windows (an installer) and Android (a
+sideload APK). The desktop builds update themselves. It exists so we can run our own
+changes without waiting for upstream review.
 
 Everything here lives in files upstream does not have. Nothing under `packages/` is
 modified, and the app's identity and update feed are set with `electron-builder -c`
@@ -113,6 +114,11 @@ The release builds AppImage, deb, rpm and tar.gz. `rpmbuild` rejects a Name tag
 containing a space, which failed the first 1.0.0 build, so deb and rpm take
 `packageName=paseo-edge` while `productName` keeps the space for display.
 
+The Windows build has no local equivalent here. electron-builder can cross-package it
+under wine, but `after-pack.js` runs a packaged smoke test that has to launch the `.exe`,
+so a real check needs a Windows host. Use `workflow_dispatch` against an existing tag
+instead — see [Windows](#windows).
+
 ## Installing
 
 Download `Paseo-Edge-x86_64.AppImage`, `chmod +x`, run it. It installs alongside a stock
@@ -215,6 +221,48 @@ idle:
 
 ```bash
 systemctl --user restart paseo-daemon
+```
+
+## Windows
+
+Every `edge-v*` tag builds Windows installers too, in the same release:
+`Paseo-Edge-Setup-<version>-x64.exe` and an `-arm64` build, plus a `.zip` of each for a
+no-installer copy. They update themselves from this repo, reading `latest.yml` the same
+way the AppImage reads `latest-linux.yml`.
+
+Windows needed nothing from the fork beyond a workflow. `packages/desktop/electron-builder.yml`
+already carries a full `win:` block — NSIS and zip, both arches, `assets/icon.ico`, and the
+`bin/paseo.cmd` CLI shim — `after-pack.js` prunes win32 natives and runs the packaged smoke
+test there, and upstream's `ci.yml` runs the server and desktop test suites on
+`windows-latest`. `.github/workflows/edge-windows-release.yml` mirrors upstream's
+`publish-windows` job with our identity overrides, exactly as the Linux one does.
+
+Coexisting with a stock Paseo is **cleaner here than on Linux**. NSIS keys the install
+directory, Start Menu entry and uninstall record off `appId`, which we override to
+`sh.paseo.desktop.edge`, and Windows groups taskbar buttons by the AppUserModelID derived
+from that same id. So there is no equivalent of the `getpaseo-desktop` app_id collision
+and no launcher workaround to install.
+
+What does carry over: `main.ts` hardcodes the app name via `app.setName`, so both builds
+use `%APPDATA%\Paseo` and share a single-instance lock. Launching Edge while a stock Paseo
+runs focuses the stock app and exits. Both also register the `paseo://` scheme, so the last
+one installed wins the association.
+
+Unlike Linux, there is **nothing else to install**: Windows has no systemd daemon to point
+at, so Edge runs its own bundled daemon and both halves of every branch are present by
+default. `scripts/edge/install-daemon.sh` and friends are Linux-only and are not needed.
+
+The installers are **unsigned**, as upstream's are — the job needs no secrets. SmartScreen
+shows "Windows protected your PC" on first run and on each update; getting rid of that means
+buying a code-signing certificate, which is not worth it while the audience is us.
+
+The arm64 build is packaged but not smoke-tested: `after-pack.js` skips the smoke when the
+build arch differs from the host's, and the runner is x64. Upstream has the same gap.
+
+To build a tag that already exists without cutting a new one:
+
+```bash
+gh workflow run "Edge Windows Release" --ref edge/main -f tag=edge-v1.6.1
 ```
 
 ## Android
@@ -377,21 +425,24 @@ Pushing a branch here runs nothing: upstream's `ci.yml` only triggers on `main` 
 PRs into it, and our `edge-v*` tags match none of upstream's tag triggers. This does not
 affect PRs sent upstream — those run in getpaseo's repo, against getpaseo's CI.
 
-Upstream's workflow files are present on `main` but GitHub has never registered them in
-this fork — `gh api repos/josham/paseo/actions/workflows` lists only
-`edge-linux-release.yml`. Publishing `edge-v1.0.0` did not fire `deploy-website.yml`
-despite its `release: published` trigger. If one ever does wake up, disable it:
+Upstream's workflow files are present on `main` and none of them has ever fired here.
+Some are now _registered_ even so — as of 2026-09-10 `gh workflow list --all` shows CI,
+Desktop Release, Android APK Release and Release Notes Sync alongside ours, each with
+zero runs, while `deploy-website.yml` and the other deploy jobs are still absent.
+Publishing `edge-v1.0.0` did not fire `deploy-website.yml` despite its
+`release: published` trigger. Registration is not a trigger, so this changes nothing —
+but it does mean the disable endpoint works on the four that appear:
 
 ```bash
 gh api -X PUT repos/josham/paseo/actions/workflows/deploy-website.yml/disable
 ```
 
-That endpoint 404s on a workflow GitHub has not registered, so it only works after the
-workflow has run at least once.
+That endpoint 404s on a workflow GitHub has not registered, which is why it could not be
+used pre-emptively on the rest.
 
-Linux x64 and Android arm64 are built. Windows would be one more job and needs no
-secrets; macOS needs an Apple Developer certificate to produce something users can open
-without fighting Gatekeeper, and iOS cannot be sideloaded at all without one.
+Linux x64, Windows x64/arm64 and Android arm64 are built. macOS is the one that is left:
+it needs an Apple Developer certificate to produce something users can open without
+fighting Gatekeeper, and iOS cannot be sideloaded at all without one.
 
 ## Licensing
 
