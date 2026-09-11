@@ -265,6 +265,27 @@ export function resolveContainerEnvEntries(
 }
 
 /**
+ * The exec binary's own environment: the daemon's, minus every key the launch
+ * unsets.
+ *
+ * `docker exec -e KEY` unsets KEY inside the environment only while the exec
+ * binary has no KEY of its own. When it has one, Docker copies that value in
+ * instead, so a key the caller removed from the daemon's environment — a
+ * credential, `CLAUDECODE` — would arrive in the container carrying the
+ * daemon's value.
+ */
+export function resolveExecClientEnv(
+  daemonEnv: ProcessEnvRecord,
+  envEntries: Array<[string, string | undefined]>,
+): ProcessEnvRecord {
+  const clientEnv = { ...daemonEnv };
+  for (const [key, value] of envEntries) {
+    if (value === undefined) delete clientEnv[key];
+  }
+  return clientEnv;
+}
+
+/**
  * ContainerExecLaunchStrategy — routes process spawning into a running
  * isolated environment via a configurable exec command.
  *
@@ -276,18 +297,22 @@ export class ContainerExecLaunchStrategy implements ProcessLaunchStrategy {
   readonly isIsolated = true;
 
   private readonly spec: ContainerExecSpec;
+  /** What launches are diffed against, and what the exec binary runs with. */
+  private readonly daemonEnv: ProcessEnvRecord;
   private defaultShell: Promise<string> | null = null;
   /** One resolution per command, cached for the container's lifetime. */
   private readonly executables = new Map<string, Promise<string>>();
 
-  constructor(spec: ContainerExecSpec) {
+  constructor(spec: ContainerExecSpec, daemonEnv: ProcessEnvRecord = process.env) {
     this.spec = { ...spec, hostWorkspaceFolder: resolve(spec.hostWorkspaceFolder) };
+    this.daemonEnv = daemonEnv;
   }
 
   spawn(command: string, args: string[], options?: LaunchSpawnOptions): ChildProcess {
+    const envEntries = resolveContainerEnvEntries(options ?? {}, this.daemonEnv);
     const resolved = this.buildExecCommand(command, args, {
       cwd: options?.cwd,
-      envEntries: resolveContainerEnvEntries(options ?? {}),
+      envEntries,
       interactive: false,
     });
 
@@ -295,7 +320,7 @@ export class ContainerExecLaunchStrategy implements ProcessLaunchStrategy {
     // environment to be found and to reach the container runtime's socket.
     return spawn(resolved.command, resolved.args, {
       cwd: this.spec.hostWorkspaceFolder,
-      env: { ...process.env },
+      env: resolveExecClientEnv(this.daemonEnv, envEntries),
       stdio: options?.stdio ?? ["pipe", "pipe", "pipe"],
       windowsHide: true,
       ...(options?.detached === undefined ? {} : { detached: options.detached }),
@@ -335,8 +360,9 @@ export class ContainerExecLaunchStrategy implements ProcessLaunchStrategy {
 
     if (this.spec.envFlag) {
       for (const [key, value] of options.envEntries) {
-        // `-e KEY` (no value) unsets the variable inside the environment;
-        // `-e KEY=value` sets it.
+        // `-e KEY=value` sets the variable. `-e KEY` (no value) unsets it, but
+        // only while the exec binary has no KEY of its own — see
+        // resolveExecClientEnv.
         execArgs.push(this.spec.envFlag, value === undefined ? key : `${key}=${value}`);
       }
     }
