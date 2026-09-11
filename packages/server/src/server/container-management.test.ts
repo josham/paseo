@@ -2123,3 +2123,118 @@ dockerTest(
   },
   180_000,
 );
+
+/**
+ * A compose container this daemon never labelled. That is not a contrived case:
+ * `up` on a compose project reuses whatever compose already has, so the labels
+ * belong to whoever created it first — VS Code, or the bare `devcontainer up`
+ * that projects document. Built here with plain compose, which is the same shape
+ * without the CLI's build time.
+ */
+dockerTest(
+  "a compose container it never labelled is still found, and removed",
+  async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    const composeFile = path.join(cwd, "docker-compose.yml");
+    const project = `paseoqa${path
+      .basename(cwd)
+      .replace(/[^a-z0-9]/gi, "")
+      .toLowerCase()}`;
+    writeFileSync(
+      composeFile,
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:latest",
+        '    command: ["sleep", "600"]',
+        "    labels:",
+        `      devcontainer.local_folder: ${cwd}`,
+        "",
+      ].join("\n"),
+    );
+    const compose = (...args: string[]) =>
+      execFileSync("docker", ["compose", "-p", project, "-f", composeFile, ...args], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+    const containersForFolder = () =>
+      execFileSync("docker", ["ps", "-aq", "--filter", `label=devcontainer.local_folder=${cwd}`], {
+        encoding: "utf8",
+      }).trim();
+
+    compose("up", "-d");
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    const ref = { key: "wks-unlabelled-compose", kind: "workspace" as const, workspaceFolder: cwd };
+
+    try {
+      expect(containersForFolder()).not.toBe("");
+      // Before the fallback this answered false, so the daemon believed there
+      // was no container while compose was handing it this one.
+      expect(await backend.isAlreadyRunning(ref)).toBe(true);
+
+      await backend.stop(ref, { remove: true });
+      expect(containersForFolder()).toBe("");
+    } finally {
+      compose("down", "-v", "--remove-orphans");
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
+
+dockerTest(
+  "a compose container another workspace stamped is left alone",
+  async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    const composeFile = path.join(cwd, "docker-compose.yml");
+    const project = `paseoqa${path
+      .basename(cwd)
+      .replace(/[^a-z0-9]/gi, "")
+      .toLowerCase()}`;
+    writeFileSync(
+      composeFile,
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:latest",
+        '    command: ["sleep", "600"]',
+        "    labels:",
+        `      devcontainer.local_folder: ${cwd}`,
+        "      paseo.container: wks-somebody-else",
+        "",
+      ].join("\n"),
+    );
+    const compose = (...args: string[]) =>
+      execFileSync("docker", ["compose", "-p", project, "-f", composeFile, ...args], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+
+    compose("up", "-d");
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+
+    try {
+      // Sharing a folder is not sharing an identity: a container another key owns
+      // stays that key's to stop.
+      expect(
+        await backend.isAlreadyRunning({
+          key: "wks-mine",
+          kind: "workspace",
+          workspaceFolder: cwd,
+        }),
+      ).toBe(false);
+      // And its real owner still finds it.
+      expect(
+        await backend.isAlreadyRunning({
+          key: "wks-somebody-else",
+          kind: "workspace",
+          workspaceFolder: cwd,
+        }),
+      ).toBe(true);
+    } finally {
+      compose("down", "-v", "--remove-orphans");
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
