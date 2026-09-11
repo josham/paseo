@@ -711,6 +711,13 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /**
+   * Shut the runtime process down while keeping the session, for a caller that
+   * is about to replace the environment it runs in. The next turn spawns a
+   * fresh process. Without this the process is killed along with its container
+   * and the provider reports that as a failed turn.
+   */
+  stopRuntime?(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;
