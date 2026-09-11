@@ -48,6 +48,9 @@ import type { LaunchStrategyFactory } from "./launch-strategy-registry.js";
 const LOCAL_FOLDER_LABEL = "devcontainer.local_folder";
 const CONFIG_FILE_LABEL = "devcontainer.config_file";
 const CONTAINER_KEY_LABEL = "paseo.container";
+// Set by compose itself, so its presence is how a shared container is told from
+// one this daemon owns outright. See findAdoptableComposeContainerId.
+const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 const CONTAINER_OWNER_LABEL = "paseo.owner";
 
 /**
@@ -152,13 +155,73 @@ export function createDevContainerBackend(
   async function findRunningContainerId(ref: ContainerRef): Promise<string | null> {
     // Both halves of the identity we stamp on: the key alone would also match a
     // container created for the same key against a different folder.
-    return findContainerId(
+    const owned = await findContainerId(
       [
         `label=${CONTAINER_KEY_LABEL}=${ref.key}`,
         `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
       ],
       { includeStopped: false },
     );
+    if (owned) return owned;
+    return findAdoptableComposeContainerId(ref, { includeStopped: false });
+  }
+
+  /**
+   * A compose project's container is shared, and `up` reuses whatever compose
+   * already has for the project regardless of who created it — VS Code, a bare
+   * `devcontainer up`, an earlier daemon. Only the creator's id-labels are on it,
+   * so one made outside Paseo carries no `paseo.container` at all and the
+   * identity query above cannot see it. The daemon then believes there is no
+   * container while plainly using one, which costs it adoption on restart and
+   * makes `stop` a no-op — an archived workspace leaves its container running.
+   *
+   * Matching on the folder alone is only safe because compose is what makes the
+   * container shared in the first place: two workspaces on one folder get one
+   * compose container anyway, where two image-based configs would get their own.
+   * Hence both guards — the candidate has to be compose's, and unclaimed or
+   * already ours, never a container another key stamped.
+   */
+  async function findAdoptableComposeContainerId(
+    ref: ContainerRef,
+    options: { includeStopped: boolean },
+  ): Promise<string | null> {
+    const [first] = await listAdoptableComposeContainerIds(ref, options);
+    return first ?? null;
+  }
+
+  async function listAdoptableComposeContainerIds(
+    ref: ContainerRef,
+    options: { includeStopped: boolean },
+  ): Promise<string[]> {
+    try {
+      const result = await execCommand(
+        dockerBin,
+        [
+          "ps",
+          "--no-trunc",
+          ...(options.includeStopped ? ["-a"] : []),
+          "--filter",
+          `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+          "--filter",
+          `label=${COMPOSE_PROJECT_LABEL}`,
+          "--format",
+          `{{.ID}} {{.Label "${CONTAINER_KEY_LABEL}"}}`,
+        ],
+        { envMode: "internal", timeout: 10_000 },
+      );
+      return result.stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [id, key] = line.trim().split(/\s+/);
+          return { id: id ?? "", key: key ?? "" };
+        })
+        .filter((entry) => entry.id !== "" && (entry.key === "" || entry.key === ref.key))
+        .map((entry) => entry.id);
+    } catch {
+      return [];
+    }
   }
 
   async function findContainerId(
@@ -389,13 +452,20 @@ export function createDevContainerBackend(
 
   /** Delete the container for a key, running or not. */
   async function removeContainer(ref: ContainerRef): Promise<void> {
-    const identifiers = await listContainerIds(
-      [
-        `label=${CONTAINER_KEY_LABEL}=${ref.key}`,
-        `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
-      ],
-      { includeStopped: true },
-    );
+    const identifiers = [
+      ...new Set([
+        ...(await listContainerIds(
+          [
+            `label=${CONTAINER_KEY_LABEL}=${ref.key}`,
+            `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+          ],
+          { includeStopped: true },
+        )),
+        // The compose container this workspace has been using may be one it
+        // never labelled; leaving it behind is what a rebuild is meant to undo.
+        ...(await listAdoptableComposeContainerIds(ref, { includeStopped: true })),
+      ]),
+    ];
     for (const identifier of identifiers) {
       try {
         await execCommand(dockerBin, ["rm", "-f", identifier], {
