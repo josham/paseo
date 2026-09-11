@@ -142,6 +142,7 @@ function createMockContainerBackend(
 async function createContainerTestSession(options: {
   backend: ContainerBackend;
   providerSnapshotManager?: ProviderSnapshotManager;
+  agentManager?: Parameters<typeof asAgentManager>[0];
 }): Promise<Session> {
   const logger = createTestLogger();
   const emitted = options.emitted ?? [];
@@ -188,6 +189,7 @@ async function createContainerTestSession(options: {
     clearAgentAttention: async () => {},
     notifyAgentState: () => {},
     cancelAgentRun: async () => ({ status: "cancelled" }),
+    ...options.agentManager,
   });
 
   const session = new Session({
@@ -636,6 +638,101 @@ test("container.restart.request returns error when workspace is not found", asyn
     expect(response.payload.containerStatus).toBeNull();
     expect(response.payload.error).toBe("Workspace not found");
   }
+});
+
+// A live session keeps the strategy it was opened with, and that strategy names
+// the container by ID. A rebuild replaces the container, so without a reopen the
+// next turn execs into a container that no longer exists.
+test.each([
+  {
+    operation: "rebuild",
+    type: "container.rebuild.request",
+    handler: "handleContainerRebuildRequest",
+  },
+  {
+    operation: "restart",
+    type: "container.restart.request",
+    handler: "handleContainerRestartRequest",
+  },
+] as const)(
+  "container.$operation reopens the workspace's agents against the new container",
+  async ({ operation, type, handler }) => {
+    const cwd = makeDevcontainerDir();
+    const emitted: SessionOutboundMessage[] = [];
+    const newHandle: ExecutionHandle = { ...HANDLE, identifier: "fedcba987654" };
+    const backend = createMockContainerBackend({ hasConfig: () => true });
+    backend[operation] = vi.fn(async () => newHandle);
+    const createStrategy = vi.fn(() => new LocalLaunchStrategy());
+    backend.createStrategy = createStrategy;
+    const reloadAgentSession = vi.fn(async () => ({}));
+
+    const session = await createContainerTestSession({
+      backend,
+      workspaces: [makeWorkspace({ cwd, containerBackend: "devcontainer" })],
+      emitted,
+      agentManager: {
+        listAgents: () => [
+          { id: "agent-in-workspace", workspaceId: "ws-test" },
+          { id: "agent-elsewhere", workspaceId: "ws-other" },
+        ],
+        reloadAgentSession,
+      },
+    });
+
+    const internals =
+      asSessionInternals<
+        Record<
+          typeof handler,
+          (msg: { type: string; workspaceId: string; requestId: string }) => Promise<void>
+        >
+      >(session);
+
+    await internals[handler]({ type, workspaceId: "ws-test", requestId: "req-1" });
+
+    expect(reloadAgentSession.mock.calls).toEqual([["agent-in-workspace"]]);
+    // Reopened only once the registry holds the new container's strategy.
+    expect(createStrategy).toHaveBeenCalledWith("ws-test", cwd, newHandle);
+    expect(createStrategy.mock.invocationCallOrder[0]).toBeLessThan(
+      reloadAgentSession.mock.invocationCallOrder[0],
+    );
+    const response = emitted.find((m) => m.type === `container.${operation}.response`);
+    expect(response).toMatchObject({ payload: { containerStatus: "running", error: null } });
+  },
+);
+
+test("an agent that fails to reopen does not fail the rebuild", async () => {
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({ hasConfig: () => true });
+
+  const session = await createContainerTestSession({
+    backend,
+    workspaces: [makeWorkspace({ cwd, containerBackend: "devcontainer" })],
+    emitted,
+    agentManager: {
+      listAgents: () => [{ id: "agent-in-workspace", workspaceId: "ws-test" }],
+      reloadAgentSession: async () => {
+        throw new Error("No conversation found");
+      },
+    },
+  });
+
+  const internals = asSessionInternals<{
+    handleContainerRebuildRequest: (msg: {
+      type: "container.rebuild.request";
+      workspaceId: string;
+      requestId: string;
+    }) => Promise<void>;
+  }>(session);
+
+  await internals.handleContainerRebuildRequest({
+    type: "container.rebuild.request",
+    workspaceId: "ws-test",
+    requestId: "req-1",
+  });
+
+  const response = emitted.find((m) => m.type === "container.rebuild.response");
+  expect(response).toMatchObject({ payload: { containerStatus: "running", error: null } });
 });
 
 test("container.availability.request returns docker availability and config detection", async () => {

@@ -5422,6 +5422,7 @@ export class Session {
         workspaceFolder: cwd,
       });
       registry.activateContainer(workspaceId, cwd, handle);
+      await this.reopenWorkspaceAgents(workspaceId);
       await this.workspaceRegistry.update(workspaceId, (record) => ({
         ...record,
         containerConfigHash: backend.getConfigHash(cwd),
@@ -5542,6 +5543,7 @@ export class Session {
         workspaceFolder: cwd,
       });
       registry.activateContainer(workspaceId, cwd, handle);
+      await this.reopenWorkspaceAgents(workspaceId);
       await this.workspaceRegistry.update(workspaceId, (record) => ({
         ...record,
         containerConfigHash: backend.getConfigHash(cwd),
@@ -5567,6 +5569,29 @@ export class Session {
         },
       });
     }
+  }
+
+  /**
+   * A live session keeps the launch strategy it was opened with, and a container
+   * strategy names its container by ID. Restart and rebuild can both hand back a
+   * different container, so the workspace's agents are reopened against the
+   * registry's new strategy; otherwise the next turn execs into a container that
+   * no longer exists. One agent failing to resume must not fail the operation.
+   */
+  private async reopenWorkspaceAgents(workspaceId: string): Promise<void> {
+    const agents = this.agentManager
+      .listAgents()
+      .filter((agent) => agent.workspaceId === workspaceId && agent.lifecycle !== "closed");
+    await Promise.all(
+      agents.map((agent) =>
+        this.agentManager.reloadAgentSession(agent.id).catch((error: unknown) => {
+          this.sessionLogger.warn(
+            { err: error, agentId: agent.id, workspaceId },
+            "Failed to reopen agent against the new container",
+          );
+        }),
+      ),
+    );
   }
 
   private buildWorkspaceGitRuntimePayload(
