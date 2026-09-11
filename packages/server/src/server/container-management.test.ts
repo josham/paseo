@@ -47,6 +47,7 @@ import {
   LocalLaunchStrategy,
   deserializeLaunchStrategy,
   resolveContainerEnvEntries,
+  resolveExecClientEnv,
 } from "./devcontainer/launch-strategy.js";
 import { execCommand } from "../utils/spawn.js";
 
@@ -1153,6 +1154,26 @@ test("container env forwards caller changes and unsets, not the daemon's own env
   expect(asObject).not.toHaveProperty("SHARED");
 });
 
+test("the exec binary runs without the keys a launch unsets, so docker cannot copy them in", () => {
+  const daemonEnv = {
+    PATH: "/host/bin",
+    DOCKER_HOST: "unix:///run/docker.sock",
+    SECRET: "daemon-value",
+  };
+
+  const clientEnv = resolveExecClientEnv(daemonEnv, [
+    ["SECRET", undefined],
+    ["PASEO_AGENT_ID", "agent-1"],
+  ]);
+
+  // A bare `-e SECRET` would otherwise copy this process's value into the container.
+  expect(clientEnv).not.toHaveProperty("SECRET");
+  // The exec binary still needs these to be found and to reach the runtime.
+  expect(clientEnv).toHaveProperty("PATH", "/host/bin");
+  expect(clientEnv).toHaveProperty("DOCKER_HOST", "unix:///run/docker.sock");
+  expect(daemonEnv).toHaveProperty("SECRET", "daemon-value");
+});
+
 test("resolveDaemonUrl rewrites loopback to the container's host gateway", () => {
   const withGateway = new ContainerExecLaunchStrategy({
     command: "docker",
@@ -1403,6 +1424,58 @@ dockerTest(
 
     await backend
       .stop({ key: "real-launch-2", kind: "workspace", workspaceFolder: cwd })
+      .catch(() => {});
+  },
+  120_000,
+);
+
+dockerTest(
+  "real backend: a variable the caller removed stays out of the container while the daemon has it",
+  async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    writeFileSync(path.join(cwd, ".devcontainer.json"), '{"image":"alpine:latest"}');
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+
+    const handle = await backend.up({
+      key: "real-launch-unset",
+      kind: "workspace",
+      workspaceFolder: cwd,
+    });
+
+    // The daemon holds a credential; the launch's base env drops it, the way
+    // an agent's environment is built from the daemon's.
+    const daemonEnv = { ...process.env, PASEO_TEST_DAEMON_SECRET: "daemon-value" };
+    const callerEnv = { ...daemonEnv };
+    delete callerEnv.PASEO_TEST_DAEMON_SECRET;
+    const strategy = new ContainerExecLaunchStrategy(
+      backend.createStrategy("real-launch-unset", cwd, handle).serialize(),
+      daemonEnv,
+    );
+
+    const child = strategy.spawn("sh", ["-c", 'printf "%s" "${PASEO_TEST_DAEMON_SECRET-unset}"'], {
+      cwd,
+      env: callerEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const { promise, resolve } = Promise.withResolvers<string>();
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+    child.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+    child.on("close", () => {
+      resolve(stdout.trim() || stderr.trim());
+    });
+    const output = await promise;
+
+    expect(output).toBe("unset");
+
+    await backend
+      .stop({ key: "real-launch-unset", kind: "workspace", workspaceFolder: cwd })
       .catch(() => {});
   },
   120_000,
