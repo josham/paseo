@@ -2905,6 +2905,19 @@ export class AgentManager {
     return this.runForegroundMutation(agentId, () => this.cancelAgentRunNow(agentId));
   }
 
+  /**
+   * Shut an agent's runtime process down without ending the agent, for a caller
+   * about to replace the environment that process runs in. It dies with that
+   * environment either way; a provider told in advance exits cleanly rather
+   * than reporting the kill as a failed turn. Providers that cannot do this
+   * simply do not implement it.
+   */
+  async stopAgentRuntime(agentId: string): Promise<void> {
+    const session = this.agents.get(agentId)?.session;
+    if (!session?.stopRuntime) return;
+    await session.stopRuntime();
+  }
+
   private async cancelAgentRunNow(agentId: string): Promise<AgentRunCancellationResult> {
     const agent = this.requireSessionAgent(agentId);
     const run =

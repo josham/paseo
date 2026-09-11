@@ -5268,7 +5268,11 @@ export class Session {
         );
         // The record already knows this; the backend must not have to guess by
         // looking at the directory, where a submodule would look the same.
-        const handle = await backend.up({ ...ref, isWorktree: workspace.kind === "worktree" });
+        const handle = await backend.up({
+          ...ref,
+          isWorktree: workspace.kind === "worktree",
+          onProgress: this.containerProgressLogger("start", workspaceId),
+        });
         registry.activateContainer(key, cwd, handle);
         if (adopted) {
           void this.checkContainerConfigStaleness(workspace);
@@ -5413,6 +5417,7 @@ export class Session {
       .listAgents()
       .filter((agent) => agent.workspaceId === workspaceId);
     await Promise.allSettled(liveAgents.map((agent) => this.agentManager.cancelAgentRun(agent.id)));
+    await this.stopWorkspaceAgentRuntimes(liveAgents);
     this.terminalController.killTerminalsForWorkspace(workspaceId);
 
     try {
@@ -5420,6 +5425,7 @@ export class Session {
         key: workspaceId,
         kind: "workspace",
         workspaceFolder: cwd,
+        onProgress: this.containerProgressLogger("restart", workspaceId),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5534,6 +5540,7 @@ export class Session {
       .listAgents()
       .filter((agent) => agent.workspaceId === workspaceId);
     await Promise.allSettled(liveAgents.map((agent) => this.agentManager.cancelAgentRun(agent.id)));
+    await this.stopWorkspaceAgentRuntimes(liveAgents);
     this.terminalController.killTerminalsForWorkspace(workspaceId);
 
     try {
@@ -5541,6 +5548,7 @@ export class Session {
         key: workspaceId,
         kind: "workspace",
         workspaceFolder: cwd,
+        onProgress: this.containerProgressLogger("rebuild", workspaceId),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5569,6 +5577,44 @@ export class Session {
         },
       });
     }
+  }
+
+  /**
+   * `devcontainer up` output, line by line, into the daemon log. A first build
+   * pulls an image and runs lifecycle scripts for minutes, and without this the
+   * only trace of any of it is the line saying it finished — or, when it fails,
+   * whatever fits in the error's stderr tail. Clients see progress only on the
+   * probe path, which has a protocol message of its own.
+   *
+   * At info, deliberately: the daemon runs at info, so debug would put this
+   * where nobody can read it. Builds are user-initiated and rare.
+   */
+  private containerProgressLogger(
+    operation: "start" | "restart" | "rebuild",
+    workspaceId: string,
+  ): (line: string) => void {
+    return (line) =>
+      this.sessionLogger.info({ workspaceId, operation, line }, "Dev container progress");
+  }
+
+  /**
+   * Shut the runtimes down before the container they live in goes away. Killed
+   * along with it instead, the provider reports an unexplained `exit code 137`
+   * turn failure on an agent the user only asked to rebuild around, and the
+   * process gets no chance to flush. One provider failing to stop must not hold
+   * up the rebuild.
+   */
+  private async stopWorkspaceAgentRuntimes(agents: ManagedAgent[]): Promise<void> {
+    await Promise.all(
+      agents.map((agent) =>
+        this.agentManager.stopAgentRuntime(agent.id).catch((error: unknown) => {
+          this.sessionLogger.warn(
+            { err: error, agentId: agent.id },
+            "Failed to stop an agent runtime before replacing its container",
+          );
+        }),
+      ),
+    );
   }
 
   /**
