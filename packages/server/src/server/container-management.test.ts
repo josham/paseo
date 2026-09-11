@@ -4,6 +4,8 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import pino from "pino";
+import type { Logger } from "pino";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { isPlatform } from "../test-utils/platform.js";
 import { Session } from "./session.js";
@@ -143,8 +145,9 @@ async function createContainerTestSession(options: {
   backend: ContainerBackend;
   providerSnapshotManager?: ProviderSnapshotManager;
   agentManager?: Parameters<typeof asAgentManager>[0];
+  logger?: Logger;
 }): Promise<Session> {
-  const logger = createTestLogger();
+  const logger = options.logger ?? createTestLogger();
   const emitted = options.emitted ?? [];
 
   const tmpDir = mkdtempSync(path.join(tmpdir(), "paseo-container-test-"));
@@ -189,6 +192,7 @@ async function createContainerTestSession(options: {
     clearAgentAttention: async () => {},
     notifyAgentState: () => {},
     cancelAgentRun: async () => ({ status: "cancelled" }),
+    stopAgentRuntime: async () => {},
     ...options.agentManager,
   });
 
@@ -665,6 +669,7 @@ test.each([
     const createStrategy = vi.fn(() => new LocalLaunchStrategy());
     backend.createStrategy = createStrategy;
     const reloadAgentSession = vi.fn(async () => ({}));
+    const stopAgentRuntime = vi.fn(async () => {});
 
     const session = await createContainerTestSession({
       backend,
@@ -676,6 +681,7 @@ test.each([
           { id: "agent-elsewhere", workspaceId: "ws-other" },
         ],
         reloadAgentSession,
+        stopAgentRuntime,
       },
     });
 
@@ -695,10 +701,58 @@ test.each([
     expect(createStrategy.mock.invocationCallOrder[0]).toBeLessThan(
       reloadAgentSession.mock.invocationCallOrder[0],
     );
+    // And stopped before the container went, so the kill is not reported as a
+    // failed turn. Same agent, both ends: only this workspace's.
+    expect(stopAgentRuntime.mock.calls).toEqual([["agent-in-workspace"]]);
+    expect(stopAgentRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+      (backend[operation] as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+    );
     const response = emitted.find((m) => m.type === `container.${operation}.response`);
     expect(response).toMatchObject({ payload: { containerStatus: "running", error: null } });
   },
 );
+
+test("a rebuild logs the CLI's output while it runs", async () => {
+  // A first build runs for minutes. Without this the daemon log jumps straight
+  // from "Rebuilding dev container" to "Dev container started", and a build that
+  // is merely slow looks identical to one that has hung.
+  const written: string[] = [];
+  const logger = pino({ level: "info" }, { write: (chunk: string) => void written.push(chunk) });
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({ hasConfig: () => true });
+  backend.rebuild = vi.fn(async (opts: ContainerUpOptions) => {
+    opts.onProgress?.("Step 3/9 : RUN curl -fsSL https://claude.ai/install.sh");
+    return HANDLE;
+  });
+
+  const session = await createContainerTestSession({
+    backend,
+    workspaces: [makeWorkspace({ cwd, containerBackend: "devcontainer" })],
+    emitted,
+    logger,
+  });
+
+  const internals = asSessionInternals<{
+    handleContainerRebuildRequest: (msg: {
+      type: "container.rebuild.request";
+      workspaceId: string;
+      requestId: string;
+    }) => Promise<void>;
+  }>(session);
+
+  await internals.handleContainerRebuildRequest({
+    type: "container.rebuild.request",
+    workspaceId: "ws-test",
+    requestId: "req-1",
+  });
+
+  const log = written.join("\n");
+  expect(log).toContain("Step 3/9");
+  // Named so a reader can tell which operation the output belongs to.
+  expect(log).toContain('"operation":"rebuild"');
+  expect(log).toContain('"workspaceId":"ws-test"');
+});
 
 test("an agent that fails to reopen does not fail the rebuild", async () => {
   const cwd = makeDevcontainerDir();
@@ -1470,7 +1524,7 @@ dockerTest(
     expect(strategy.isIsolated).toBe(true);
 
     await backend
-      .stop({ key: "real-launch-1", kind: "workspace", workspaceFolder: cwd })
+      .stop({ key: "real-launch-1", kind: "workspace", workspaceFolder: cwd }, { remove: true })
       .catch(() => {});
   },
   120_000,
@@ -1520,7 +1574,7 @@ dockerTest(
     expect(output).toBe("agent-in-container from-launch-env");
 
     await backend
-      .stop({ key: "real-launch-2", kind: "workspace", workspaceFolder: cwd })
+      .stop({ key: "real-launch-2", kind: "workspace", workspaceFolder: cwd }, { remove: true })
       .catch(() => {});
   },
   120_000,
@@ -1572,7 +1626,7 @@ dockerTest(
     expect(output).toBe("unset");
 
     await backend
-      .stop({ key: "real-launch-unset", kind: "workspace", workspaceFolder: cwd })
+      .stop({ key: "real-launch-unset", kind: "workspace", workspaceFolder: cwd }, { remove: true })
       .catch(() => {});
   },
   120_000,
@@ -1944,7 +1998,7 @@ dockerTest(
     expect(await strategy.resolveDefaultShell()).toBe("/bin/ash");
 
     await backend
-      .stop({ key: "real-shell", kind: "workspace", workspaceFolder: cwd })
+      .stop({ key: "real-shell", kind: "workspace", workspaceFolder: cwd }, { remove: true })
       .catch(() => {});
   },
   120_000,
