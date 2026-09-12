@@ -5310,6 +5310,26 @@ export class Session {
     if (!backend) return;
 
     const currentHash = backend.getConfigHash(workspace.cwd);
+
+    // What the container says it was built from beats what this workspace last
+    // recorded. A workspace created today records today's hash and then adopts
+    // whatever container already existed for the folder, so the record can agree
+    // with the config while the container predates both.
+    const containerHash = backend.getContainerConfigHash(workspace.workspaceId);
+    if (containerHash !== null) {
+      if (containerHash !== currentHash) {
+        this.sessionLogger.info(
+          { workspaceId: workspace.workspaceId, cwd: workspace.cwd },
+          "Dev container was built from an older config",
+        );
+        this.emit({
+          type: "container.config_changed",
+          payload: { workspaceId: workspace.workspaceId },
+        });
+      }
+      return;
+    }
+
     const record = await this.workspaceRegistry.get(workspace.workspaceId);
     if (!record) return;
 

@@ -138,6 +138,13 @@ export interface ContainerBackend {
    * Null when this key has no running container.
    */
   getContainerInfo(key: string): ContainerInfo | null;
+  /**
+   * The config hash the running container was stamped with at creation, or null
+   * when it carries none. Distinct from `getConfigHash`, which answers for the
+   * files as they stand now: comparing the two is how a container built from an
+   * older config — or an older image — is told apart from a current one.
+   */
+  getContainerConfigHash(key: string): string | null;
 
   /**
    * Restart the environment for a workspace — stop the running container and
