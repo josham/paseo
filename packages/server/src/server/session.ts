@@ -5271,7 +5271,7 @@ export class Session {
         const handle = await backend.up({
           ...ref,
           isWorktree: workspace.kind === "worktree",
-          onProgress: this.containerProgressLogger("start", workspaceId),
+          onProgress: this.containerProgressReporter("start", workspaceId),
         });
         registry.activateContainer(key, cwd, handle);
         if (adopted) {
@@ -5445,7 +5445,7 @@ export class Session {
         key: workspaceId,
         kind: "workspace",
         workspaceFolder: cwd,
-        onProgress: this.containerProgressLogger("restart", workspaceId),
+        onProgress: this.containerProgressReporter("restart", workspaceId),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5568,7 +5568,7 @@ export class Session {
         key: workspaceId,
         kind: "workspace",
         workspaceFolder: cwd,
-        onProgress: this.containerProgressLogger("rebuild", workspaceId),
+        onProgress: this.containerProgressReporter("rebuild", workspaceId),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5600,21 +5600,30 @@ export class Session {
   }
 
   /**
-   * `devcontainer up` output, line by line, into the daemon log. A first build
-   * pulls an image and runs lifecycle scripts for minutes, and without this the
-   * only trace of any of it is the line saying it finished — or, when it fails,
-   * whatever fits in the error's stderr tail. Clients see progress only on the
-   * probe path, which has a protocol message of its own.
+   * `devcontainer up` output, line by line, to the daemon log and to the client.
+   * A first build pulls an image and runs lifecycle scripts for minutes; without
+   * this the only trace is the line saying it finished — or, when it fails,
+   * whatever fits in the error's stderr tail — and a build that has hung looks
+   * exactly like one that is merely slow.
    *
-   * At info, deliberately: the daemon runs at info, so debug would put this
+   * Logged at info deliberately: the daemon runs at info, so debug would put it
    * where nobody can read it. Builds are user-initiated and rare.
+   *
+   * Not accumulated. A first build is thousands of lines, the client keeps only
+   * the latest, and buffering them here would grow a per-workspace log nobody
+   * reads.
    */
-  private containerProgressLogger(
+  private containerProgressReporter(
     operation: "start" | "restart" | "rebuild",
     workspaceId: string,
   ): (line: string) => void {
-    return (line) =>
+    return (line) => {
       this.sessionLogger.info({ workspaceId, operation, line }, "Dev container progress");
+      this.emit({
+        type: "container.lifecycle.progress",
+        payload: { workspaceId, operation, line },
+      });
+    };
   }
 
   /**

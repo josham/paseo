@@ -3150,6 +3150,25 @@ export const ContainerProbeProgressNotificationSchema = z.object({
   }),
 });
 
+/**
+ * One line of `devcontainer up` output for a workspace's own container, as it
+ * runs. Distinct from `container.probe.progress`, which belongs to a throwaway
+ * probe and is correlated by requestId: this is keyed by workspace, because
+ * nobody has to have asked for it — a workspace opening starts its container.
+ */
+export const ContainerLifecycleProgressNotificationSchema = z.object({
+  type: z.literal("container.lifecycle.progress"),
+  payload: z.object({
+    workspaceId: z.string(),
+    // Which operation is producing the output, so a client can say "Rebuilding"
+    // rather than guessing from the fact that lines are arriving.
+    operation: z.enum(["start", "restart", "rebuild"]),
+    // One line, most recent last. Not accumulated by the daemon: a first build
+    // is thousands of lines and the UI keeps only the latest.
+    line: z.string(),
+  }),
+});
+
 export const ContainerProbeResponseSchema = z.object({
   type: z.literal("container.probe.response"),
   payload: z.object({
@@ -3545,6 +3564,8 @@ export const ServerInfoStatusPayloadSchema = z
       .object({
         // COMPAT(agentRequestReceipts): added in v0.7.3; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
+        // COMPAT(containerLifecycleProgress): added in v0.7.3; remove gate after 2027-09-11.
+        containerLifecycleProgress: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.7.3; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
@@ -6803,6 +6824,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ContainerAvailabilityResponseSchema,
   ContainerProbeResponseSchema,
   ContainerProbeProgressNotificationSchema,
+  ContainerLifecycleProgressNotificationSchema,
   ContainerConfigChangedNotificationSchema,
 ]);
 
@@ -7270,6 +7292,9 @@ export type ContainerProbeCancelRequest = z.infer<typeof ContainerProbeCancelReq
 export type ContainerProbeResponse = z.infer<typeof ContainerProbeResponseSchema>;
 export type ContainerProbeProgressNotification = z.infer<
   typeof ContainerProbeProgressNotificationSchema
+>;
+export type ContainerLifecycleProgressNotification = z.infer<
+  typeof ContainerLifecycleProgressNotificationSchema
 >;
 export type ContainerConfigChangedNotification = z.infer<
   typeof ContainerConfigChangedNotificationSchema

@@ -2413,3 +2413,45 @@ dockerTest(
   },
   180_000,
 );
+
+test("a rebuild streams the CLI's output to the client, not just the log", async () => {
+  // The log fixed debugging; this is what a user watching a build sees.
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({ hasConfig: () => true });
+  backend.rebuild = vi.fn(async (opts: ContainerUpOptions) => {
+    opts.onProgress?.("Step 3/9 : RUN curl -fsSL https://claude.ai/install.sh");
+    opts.onProgress?.("Running the postCreateCommand from devcontainer.json...");
+    return HANDLE;
+  });
+
+  const session = await createContainerTestSession({
+    backend,
+    workspaces: [makeWorkspace({ cwd, containerBackend: "devcontainer" })],
+    emitted,
+  });
+
+  const internals = asSessionInternals<{
+    handleContainerRebuildRequest: (msg: {
+      type: "container.rebuild.request";
+      workspaceId: string;
+      requestId: string;
+    }) => Promise<void>;
+  }>(session);
+
+  await internals.handleContainerRebuildRequest({
+    type: "container.rebuild.request",
+    workspaceId: "ws-test",
+    requestId: "req-1",
+  });
+
+  const progress = emitted.filter((m) => m.type === "container.lifecycle.progress");
+  expect(progress).toHaveLength(2);
+  expect(progress[0]).toMatchObject({
+    payload: { workspaceId: "ws-test", operation: "rebuild" },
+  });
+  // Lines arrive in order, so the latest is the one a client should show.
+  if (progress[1]?.type === "container.lifecycle.progress") {
+    expect(progress[1].payload.line).toContain("postCreateCommand");
+  }
+});
