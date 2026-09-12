@@ -2238,3 +2238,65 @@ dockerTest(
   },
   180_000,
 );
+
+/**
+ * The collision is compose's, not ours: it names a project after the directory,
+ * so two checkouts called the same thing resolve to one container. Reproduced
+ * through the real CLI, because the naming is exactly the part a fixture would
+ * only assert we had guessed right.
+ */
+dockerTest(
+  "refuses the container when it is already serving another checkout",
+  async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    const write = (folder: string) => {
+      const config = path.join(folder, ".devcontainer");
+      execFileSync("mkdir", ["-p", config]);
+      writeFileSync(
+        path.join(config, "docker-compose.yml"),
+        [
+          "services:",
+          "  app:",
+          "    image: alpine:latest",
+          '    command: ["sleep", "600"]',
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        path.join(config, "devcontainer.json"),
+        JSON.stringify({
+          dockerComposeFile: "docker-compose.yml",
+          service: "app",
+          workspaceFolder: "/workspace",
+          overrideCommand: false,
+        }),
+      );
+    };
+    // Same basename, different paths: that is all it takes.
+    const first = path.join(root, "one", "proj");
+    const second = path.join(root, "two", "proj");
+    write(first);
+    write(second);
+
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    const firstRef = { key: "wks-first", kind: "workspace" as const, workspaceFolder: first };
+
+    try {
+      const handle = await backend.up(firstRef);
+      expect(handle.identifier).not.toBe("");
+
+      // Unguarded, this resolved to the first checkout's container and its mounts.
+      await expect(
+        backend.up({ key: "wks-second", kind: "workspace", workspaceFolder: second }),
+      ).rejects.toThrow(/already serving/);
+      // And it names the folder it is serving, so the message is actionable.
+      await expect(
+        backend.up({ key: "wks-second", kind: "workspace", workspaceFolder: second }),
+      ).rejects.toThrow(new RegExp(first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    } finally {
+      await backend.stop(firstRef, { remove: true }).catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+  240_000,
+);

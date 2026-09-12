@@ -15,9 +15,14 @@ export type { LaunchStrategyFactory };
  * the active backend and uses it to create strategies when environments
  * are activated. Adding a new backend does not require changing this registry.
  *
- * Containers are keyed by workspaceId rather than by workspace folder, so two
- * workspaces that share a cwd keep independent containers and the registry
- * stays free of path resolution.
+ * Containers are keyed by workspaceId rather than by workspace folder, which
+ * keeps the registry free of path resolution. That key is what *Paseo* keys on;
+ * it does not always buy isolation. An image or Dockerfile config does get a
+ * container per workspace, but a **compose** config does not: compose identifies
+ * a project by its directory name, so every workspace on one checkout shares a
+ * single container regardless of the key here. `assertContainerServesFolder` in
+ * the dev container backend is what keeps that sharing from crossing into a
+ * different checkout.
  *
  * Every caller uses `awaitStrategy`: a container that is still starting must
  * not send the process to the host in the meantime, so the call blocks until
