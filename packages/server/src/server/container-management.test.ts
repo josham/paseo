@@ -84,6 +84,7 @@ function createMockContainerBackend(
     isAvailable?: () => Promise<boolean>;
     isAlreadyRunning?: (ref: ContainerRef) => Promise<boolean>;
     configHash?: string | null;
+    containerConfigHash?: string | null;
     preservesHostWorkspacePath?: (workspaceFolder: string) => Promise<boolean>;
   } = {},
 ): ContainerBackend {
@@ -130,6 +131,9 @@ function createMockContainerBackend(
     },
     getConfigHash(_cwd: string) {
       return options.configHash ?? "hash-123";
+    },
+    getContainerConfigHash(_key: string) {
+      return options.containerConfigHash ?? null;
     },
     preservesHostWorkspacePath:
       options.preservesHostWorkspacePath ?? (async (_workspaceFolder: string) => false),
@@ -2299,4 +2303,113 @@ dockerTest(
     }
   },
   240_000,
+);
+
+test("a container built from an older config is flagged even when the record agrees", async () => {
+  // The case the persisted hash cannot see: this workspace recorded the current
+  // hash when it was created, then adopted a container that predates it.
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({
+    hasConfig: () => true,
+    isAlreadyRunning: async () => true,
+    configHash: "hash-current",
+    containerConfigHash: "hash-from-an-older-image",
+  });
+
+  const workspace = makeWorkspace({ cwd, containerBackend: "devcontainer" });
+  const session = await createContainerTestSession({
+    backend,
+    workspaces: [{ ...workspace, containerConfigHash: "hash-current" }],
+    emitted,
+  });
+
+  const internals = asSessionInternals<{
+    checkContainerConfigStaleness: (workspace: PersistedWorkspaceRecord) => Promise<void>;
+  }>(session);
+
+  await internals.checkContainerConfigStaleness({
+    ...workspace,
+    containerConfigHash: "hash-current",
+  });
+
+  expect(emitted.filter((m) => m.type === "container.config_changed")).toHaveLength(1);
+});
+
+test("a container built from the current config is left alone", async () => {
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({
+    hasConfig: () => true,
+    isAlreadyRunning: async () => true,
+    configHash: "hash-current",
+    containerConfigHash: "hash-current",
+  });
+
+  const workspace = makeWorkspace({ cwd, containerBackend: "devcontainer" });
+  const session = await createContainerTestSession({
+    backend,
+    // Deliberately stale in the record: the container's own stamp is what counts.
+    workspaces: [{ ...workspace, containerConfigHash: "hash-stale-record" }],
+    emitted,
+  });
+
+  const internals = asSessionInternals<{
+    checkContainerConfigStaleness: (workspace: PersistedWorkspaceRecord) => Promise<void>;
+  }>(session);
+
+  await internals.checkContainerConfigStaleness({
+    ...workspace,
+    containerConfigHash: "hash-stale-record",
+  });
+
+  expect(emitted.filter((m) => m.type === "container.config_changed")).toEqual([]);
+});
+
+test("the config hash covers the files devcontainer.json names", () => {
+  // devcontainer.json alone misses the thing that actually changes the image.
+  const backend = createDevContainerBackend({ logger: createTestLogger() });
+  const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-hash-"));
+  const configDir = path.join(cwd, ".devcontainer");
+  execFileSync("mkdir", ["-p", configDir]);
+  writeFileSync(
+    path.join(configDir, "devcontainer.json"),
+    // With a comment, because devcontainer.json is JSONC and the reference is
+    // pulled out of the raw text.
+    '{\n  // build inputs live next door\n  "build": { "dockerfile": "Dockerfile" }\n}',
+  );
+  const dockerfile = path.join(configDir, "Dockerfile");
+  writeFileSync(dockerfile, "FROM alpine:latest\n");
+
+  const before = backend.getConfigHash(cwd);
+  expect(before).not.toBeNull();
+
+  // Only the Dockerfile changes. devcontainer.json is untouched.
+  writeFileSync(dockerfile, "FROM alpine:latest\nRUN echo claude\n");
+  expect(backend.getConfigHash(cwd)).not.toBe(before);
+
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+dockerTest(
+  "stamps the config hash on the container it builds",
+  async () => {
+    // The stamp is only useful if the CLI really carries `--id-label` through to
+    // the container, so this asks docker rather than trusting the argument.
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    writeFileSync(path.join(cwd, ".devcontainer.json"), '{"image":"alpine:latest"}');
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    const ref = { key: "wks-stamped", kind: "workspace" as const, workspaceFolder: cwd };
+
+    try {
+      await backend.up(ref);
+      const stamped = backend.getContainerConfigHash(ref.key);
+      expect(stamped).toBe(backend.getConfigHash(cwd));
+      expect(stamped).not.toBeNull();
+    } finally {
+      await backend.stop(ref, { remove: true }).catch(() => {});
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  180_000,
 );
