@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -51,6 +51,11 @@ const CONTAINER_KEY_LABEL = "paseo.container";
 // Set by compose itself, so its presence is how a shared container is told from
 // one this daemon owns outright. See findAdoptableComposeContainerId.
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
+// Stamped at creation so an adopted container can be judged against the config as
+// it stands now. The persisted workspace hash cannot answer for a container this
+// daemon did not build — a fresh workspace records today's hash and learns nothing
+// about the container it then adopts.
+const CONFIG_HASH_LABEL = "paseo.config_hash";
 const CONTAINER_OWNER_LABEL = "paseo.owner";
 
 /**
@@ -102,6 +107,9 @@ export function createDevContainerBackend(
   // Captured at start time. Workspace descriptors are rebuilt on every workspace
   // update, so the UI's container details cannot be a per-build docker query.
   const containerInfoByKey = new Map<string, ContainerInfo>();
+  // The config hash each running container was stamped with, or null when it
+  // carries none — a container built by VS Code or a bare `devcontainer up`.
+  const containerConfigHashByKey = new Map<string, string | null>();
   let availabilityCache: { available: boolean; checkedAt: number } | null = null;
 
   async function isAvailable(): Promise<boolean> {
@@ -263,6 +271,7 @@ export function createDevContainerBackend(
       // creation rather than at cleanup time.
       throw new Error(`Container ref ${ref.key} has an invalid kind: ${String(ref.kind)}`);
     }
+    const configHash = getConfigHash(ref.workspaceFolder);
     return [
       "--id-label",
       `${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
@@ -272,6 +281,7 @@ export function createDevContainerBackend(
       `${CONTAINER_KEY_LABEL}=${ref.key}`,
       "--id-label",
       `${CONTAINER_OWNER_LABEL}=${ref.kind}`,
+      ...(configHash ? ["--id-label", `${CONFIG_HASH_LABEL}=${configHash}`] : []),
     ];
   }
 
@@ -388,6 +398,12 @@ export function createDevContainerBackend(
 
     handles.set(options.key, handle);
     containerInfoByKey.set(options.key, buildContainerInfo(handle, inspected));
+    // What the container itself says it was built from, which for an adopted one
+    // is not necessarily what this daemon would build now.
+    containerConfigHashByKey.set(
+      options.key,
+      inspected?.Config?.Labels?.[CONFIG_HASH_LABEL] ?? null,
+    );
     logger.info(
       { workspaceFolder, identifier: handle.identifier, remoteUser: handle.remoteUser },
       "Dev container started",
@@ -595,15 +611,62 @@ export function createDevContainerBackend(
     }
   }
 
+  /**
+   * What "the config changed" means. devcontainer.json alone is not enough: the
+   * image is built from the Dockerfile or compose files it names, so editing those
+   * changes what a container would be while leaving this hash untouched. That gap
+   * cost a debugging session — a container built before `claude` existed in the
+   * image was reused indefinitely, and the only symptom was
+   * `Provider 'claude' is not available`.
+   *
+   * The references are pulled out with a narrow match rather than parsed:
+   * devcontainer.json is JSONC and nothing here parses that. A missed reference
+   * only costs sensitivity — the same blind spot as before, never a wrong answer —
+   * and a path that does not resolve to a file is skipped.
+   */
   function getConfigHash(workspaceFolder: string): string | null {
     const config = discoverDevContainerConfig(workspaceFolder);
     if (!config) return null;
     try {
       const content = readFileSync(config.configPath, "utf-8");
-      return createHash("sha256").update(content).digest("hex");
+      const hash = createHash("sha256").update(content);
+      for (const reference of referencedBuildFiles(content, dirname(config.configPath))) {
+        try {
+          // The name as well as the bytes: renaming a Dockerfile changes the build
+          // even when both files exist.
+          hash.update(reference);
+          hash.update(readFileSync(reference));
+        } catch {
+          /* named but absent, or unreadable — nothing to fold in */
+        }
+      }
+      return hash.digest("hex");
     } catch {
       return null;
     }
+  }
+
+  /** Absolute paths of the build inputs a devcontainer.json names, in a stable order. */
+  function referencedBuildFiles(configContent: string, configDir: string): string[] {
+    const found = new Set<string>();
+    const add = (value: string) => {
+      const trimmed = value.trim();
+      // A URL or a variable the CLI expands is not a path this can read.
+      if (!trimmed || trimmed.includes("://") || trimmed.includes("${")) return;
+      found.add(resolve(configDir, trimmed));
+    };
+    for (const [, single] of configContent.matchAll(
+      /"(?:dockerComposeFile|dockerfile|dockerFile)"\s*:\s*"([^"]+)"/g,
+    )) {
+      if (single) add(single);
+    }
+    // The array form, `"dockerComposeFile": ["base.yml", "override.yml"]`.
+    for (const [, list] of configContent.matchAll(/"dockerComposeFile"\s*:\s*\[([^\]]*)\]/g)) {
+      for (const [, entry] of (list ?? "").matchAll(/"([^"]+)"/g)) {
+        if (entry) add(entry);
+      }
+    }
+    return [...found].sort();
   }
 
   async function isAlreadyRunning(ref: ContainerRef): Promise<boolean> {
@@ -615,6 +678,15 @@ export function createDevContainerBackend(
 
   function getContainerInfo(key: string): ContainerInfo | null {
     return containerInfoByKey.get(key) ?? null;
+  }
+
+  /**
+   * The config hash the running container was built from, as stamped on it.
+   * `null` when it carries no stamp, which is itself worth knowing: the container
+   * came from somewhere else and nothing can say what it was built from.
+   */
+  function getContainerConfigHash(key: string): string | null {
+    return containerConfigHashByKey.get(key) ?? null;
   }
 
   /**
@@ -647,6 +719,7 @@ export function createDevContainerBackend(
     stop,
     getHandle,
     getContainerInfo,
+    getContainerConfigHash,
     restart,
     rebuild,
     getConfigHash,
