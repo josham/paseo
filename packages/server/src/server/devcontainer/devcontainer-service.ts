@@ -420,11 +420,17 @@ export function createDevContainerBackend(
    */
   function runDevContainerCli(
     args: string[],
-    options: Pick<ContainerUpOptions, "onProgress" | "signal">,
+    options: Pick<ContainerUpOptions, "onProgress" | "signal" | "composeProject">,
   ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolveRun, rejectRun) => {
       const child = spawn(devcontainerBin, args, {
-        env: { ...process.env },
+        // COMPOSE_PROJECT_NAME is how a compose project gets a name of our
+        // choosing: the CLI has no flag for it, and it honours the variable over
+        // the name it would derive from the folder. Verified against the CLI.
+        env: {
+          ...process.env,
+          ...(options.composeProject ? { COMPOSE_PROJECT_NAME: options.composeProject } : {}),
+        },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         ...(options.signal ? { signal: options.signal } : {}),

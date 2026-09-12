@@ -41,6 +41,7 @@ import type {
 } from "./devcontainer/container-backend.js";
 import { createDevContainerBackend, createLaunchStrategyRegistry } from "./devcontainer/index.js";
 import { createContainerBackendRegistry } from "./devcontainer/container-backend-registry.js";
+import { composeProjectNameFor } from "./devcontainer/compose-project.js";
 import { ContainerProbeCoordinator } from "./devcontainer/container-probe-coordinator.js";
 import { createLaunchFileSystem } from "./devcontainer/launch-filesystem.js";
 import { ClaudeAgentClient } from "./agent/providers/claude/agent.js";
@@ -2455,3 +2456,122 @@ test("a rebuild streams the CLI's output to the client, not just the log", async
     expect(progress[1].payload.line).toContain("postCreateCommand");
   }
 });
+
+test("a compose project name is legal whatever the key looks like", () => {
+  // Compose wants lowercase, and a letter or digit first. Probe keys carry a
+  // colon and a uuid; workspace ids carry an underscore.
+  expect(composeProjectNameFor("wks_3f3ccfb593bf20be")).toBe("paseo-wks_3f3ccfb593bf20be");
+  expect(composeProjectNameFor("probe:9E1F-4a")).toBe("paseo-probe-9e1f-4a");
+  expect(composeProjectNameFor("__leading")).toBe("paseo-leading");
+  expect(composeProjectNameFor("")).toBe("paseo-");
+});
+
+test("changing container scope stops the container the old identity owned", async () => {
+  // The running container belongs to the project name it was built under, and
+  // nothing will look for it again — leaving it behind is a container with agents
+  // in it that no workspace admits to.
+  const cwd = makeDevcontainerDir();
+  const emitted: SessionOutboundMessage[] = [];
+  const backend = createMockContainerBackend({ hasConfig: () => true });
+  const stop = vi.fn(async () => {});
+  backend.stop = stop;
+  const stopAgentRuntime = vi.fn(async () => {});
+
+  const session = await createContainerTestSession({
+    backend,
+    workspaces: [makeWorkspace({ cwd, containerBackend: "devcontainer" })],
+    emitted,
+    agentManager: {
+      listAgents: () => [{ id: "agent-in-workspace", workspaceId: "ws-test" }],
+      stopAgentRuntime,
+    },
+  });
+
+  const internals = asSessionInternals<{
+    handleWorkspaceContainerScopeSetRequest: (
+      workspaceId: string,
+      scope: "project" | "workspace",
+      requestId: string,
+    ) => Promise<void>;
+  }>(session);
+
+  await internals.handleWorkspaceContainerScopeSetRequest("ws-test", "workspace", "req-1");
+
+  const response = emitted.find((m) => m.type === "workspace.container_scope.set.response");
+  expect(response).toMatchObject({
+    payload: { accepted: true, containerScope: "workspace", error: null },
+  });
+  // Removed, not merely stopped: under the new name it is unreachable anyway.
+  expect(stop).toHaveBeenCalledWith(
+    expect.objectContaining({ key: "ws-test", workspaceFolder: cwd }),
+    { remove: true },
+  );
+  // And the agents inside it were told first, so the kill is not a failed turn.
+  expect(stopAgentRuntime).toHaveBeenCalledWith("agent-in-workspace");
+});
+
+/**
+ * The point of the whole feature: two workspaces on one checkout, one of them
+ * isolated, must not be the same container. Compose decides that by project name,
+ * so this is the only test that can prove it.
+ */
+dockerTest(
+  "an isolated workspace gets its own container on a shared checkout",
+  async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
+    const configDir = path.join(cwd, ".devcontainer");
+    execFileSync("mkdir", ["-p", configDir]);
+    writeFileSync(
+      path.join(configDir, "docker-compose.yml"),
+      ["services:", "  app:", "    image: alpine:latest", '    command: ["sleep", "600"]', ""].join(
+        "\n",
+      ),
+    );
+    writeFileSync(
+      path.join(configDir, "devcontainer.json"),
+      JSON.stringify({
+        dockerComposeFile: "docker-compose.yml",
+        service: "app",
+        workspaceFolder: "/workspace",
+        overrideCommand: false,
+      }),
+    );
+
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    const shared = { key: "wks-shared", kind: "workspace" as const, workspaceFolder: cwd };
+    const isolated = { key: "wks-isolated", kind: "workspace" as const, workspaceFolder: cwd };
+
+    try {
+      // Compose's own naming: both of these would be the same container.
+      const first = await backend.up(shared);
+      const second = await backend.up({
+        ...isolated,
+        composeProject: composeProjectNameFor(isolated.key),
+      });
+
+      expect(first.identifier).not.toBe(second.identifier);
+      expect(
+        execFileSync(
+          "docker",
+          [
+            "inspect",
+            second.identifier,
+            "--format",
+            '{{index .Config.Labels "com.docker.compose.project"}}',
+          ],
+          { encoding: "utf8" },
+        ).trim(),
+      ).toBe(composeProjectNameFor(isolated.key));
+    } finally {
+      await backend.stop(shared, { remove: true }).catch(() => {});
+      await backend
+        .stop(
+          { ...isolated, composeProject: composeProjectNameFor(isolated.key) },
+          { remove: true },
+        )
+        .catch(() => {});
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  240_000,
+);

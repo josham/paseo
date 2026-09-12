@@ -729,6 +729,13 @@ export const es: TranslationResources = {
         restartConfirmTitle: "Reiniciar contenedor",
         restartConfirmMessage:
           "Se reiniciarán todos los agentes y terminales en ejecución. ¿Reiniciar el contenedor?",
+        isolateAction: "Dar a este espacio de trabajo su propio contenedor",
+        shareAction: "Compartir el contenedor de esta copia",
+        scopeConfirmTitle: "Cambiar el aislamiento del contenedor",
+        scopeIsolateConfirmMessage:
+          "Este espacio de trabajo tendrá su propio contenedor, creado desde cero, más su propia copia de cada servicio que defina el proyecto. Esas copias empiezan vacías. El contenedor que usa ahora se elimina.",
+        scopeShareConfirmMessage:
+          "Este espacio de trabajo vuelve a compartir un contenedor por copia del repositorio. Se elimina el contenedor que tenía para sí, junto con los datos guardados solo dentro de él.",
       },
       toasts: {
         workspacePathUnavailable: "La rutaWorkspaceaún no está disponible",

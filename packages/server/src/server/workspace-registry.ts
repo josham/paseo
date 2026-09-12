@@ -110,6 +110,15 @@ const PersistedWorkspaceRecordSchema = z.object({
   // terminals directly on the host; a string (e.g. "devcontainer") is a
   // backend ID looked up in the ContainerBackendRegistry.
   containerBackend: z.string().nullable().default(null),
+  // Who owns the container's identity for a compose config. "project" leaves it
+  // to compose, which derives it from the checkout's directory name — one stack
+  // per checkout, shared by every workspace on it, the same thing VS Code lands
+  // on. "workspace" forces a compose project of Paseo's own so this workspace
+  // gets a stack to itself, at the cost of a duplicate of every sibling service
+  // and of any volume that is project-scoped. Defaulted, so no record needs
+  // migrating. Nothing for an image or Dockerfile config, which is already one
+  // container per workspace.
+  containerScope: z.enum(["project", "workspace"]).default("project"),
 });
 
 export type PersistedProjectRecord = z.infer<typeof PersistedProjectRecordSchema>;
@@ -693,6 +702,7 @@ export function createPersistedWorkspaceRecord(input: {
   labels?: string[];
   untrustedSource?: UntrustedWorkspaceSource;
   containerBackend?: string | null;
+  containerScope?: "project" | "workspace";
 }): PersistedWorkspaceRecord {
   return PersistedWorkspaceRecordSchema.parse({
     ...input,
@@ -706,6 +716,7 @@ export function createPersistedWorkspaceRecord(input: {
     autoArchivedChangeRequestUrl: input.autoArchivedChangeRequestUrl ?? null,
     pinnedAt: input.pinnedAt ?? null,
     containerBackend: input.containerBackend ?? null,
+    containerScope: input.containerScope ?? "project",
   });
 }
 

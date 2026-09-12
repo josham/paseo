@@ -2775,6 +2775,32 @@ export class DaemonClient {
     return { containerBackend: payload.containerBackend };
   }
 
+  /**
+   * Who names this workspace's compose project. "workspace" gives it a stack of
+   * its own; "project" leaves identity to compose, which shares one stack per
+   * checkout the way VS Code does. Gate on
+   * `server_info.features.containerScope`.
+   */
+  async setWorkspaceContainerScope(
+    workspaceId: string,
+    containerScope: "project" | "workspace",
+    requestId?: string,
+  ): Promise<{ containerScope: "project" | "workspace" }> {
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "workspace.container_scope.set.request",
+        workspaceId,
+        containerScope,
+      },
+      responseType: "workspace.container_scope.set.response",
+    });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "setWorkspaceContainerScope rejected");
+    }
+    return { containerScope: payload.containerScope };
+  }
+
   async inspectWorkspaceRecovery(
     workspaceId: string,
     requestId?: string,

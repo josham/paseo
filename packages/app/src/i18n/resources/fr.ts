@@ -729,6 +729,13 @@ export const fr: TranslationResources = {
         restartConfirmTitle: "Redémarrer le conteneur",
         restartConfirmMessage:
           "Tous les agents et terminaux en cours d'exécution seront redémarrés. Redémarrer le conteneur ?",
+        isolateAction: "Donner à cet espace de travail son propre conteneur",
+        shareAction: "Partager le conteneur de cette copie",
+        scopeConfirmTitle: "Modifier l'isolation du conteneur",
+        scopeIsolateConfirmMessage:
+          "Cet espace de travail obtient son propre conteneur, reconstruit de zéro, ainsi que sa propre copie de chaque service défini par le projet. Ces copies démarrent vides. Le conteneur utilisé actuellement est supprimé.",
+        scopeShareConfirmMessage:
+          "Cet espace de travail repartage un conteneur par copie du dépôt. Le conteneur qui lui était réservé est supprimé, avec les données conservées uniquement à l'intérieur.",
       },
       toasts: {
         workspacePathUnavailable: "Le cheminWorkspacen'est pas encore disponible",

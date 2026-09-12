@@ -33,6 +33,7 @@ import { hostGitSupportsRelativeWorktrees } from "./devcontainer/relative-worktr
 import { ContainerNotRunningError } from "./devcontainer/launch-strategy-registry.js";
 import type { ContainerRef } from "./devcontainer/container-backend.js";
 import { discoverDevContainerConfig } from "./devcontainer/config-discovery.js";
+import { composeProjectNameFor } from "./devcontainer/compose-project.js";
 import type {
   TerminalManager,
   TerminalWorkspaceContributionChangedEvent,
@@ -2634,10 +2635,28 @@ export class Session {
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
       case "workspace.pin.set.request":
         return this.handleWorkspacePinSetRequest(msg.workspaceId, msg.pinned, msg.requestId);
+      default:
+        return this.dispatchWorkspaceContainerMessage(msg);
+    }
+  }
+
+  /**
+   * The workspace's container settings. Split from the dispatcher above only to
+   * keep its branch count under the complexity limit; adding the next container
+   * setting belongs here.
+   */
+  private dispatchWorkspaceContainerMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
       case "workspace.container_backend.set.request":
         return this.handleWorkspaceContainerBackendSetRequest(
           msg.workspaceId,
           msg.containerBackend,
+          msg.requestId,
+        );
+      case "workspace.container_scope.set.request":
+        return this.handleWorkspaceContainerScopeSetRequest(
+          msg.workspaceId,
+          msg.containerScope,
           msg.requestId,
         );
       default:
@@ -3529,6 +3548,74 @@ export class Session {
         },
       });
       emitResponse(false, null, getErrorMessageOr(error, "Failed to pin workspace"));
+    }
+  }
+
+  /**
+   * Change who names this workspace's compose project. The container running now
+   * belongs to the old identity, and nothing would ever look for it again, so it
+   * is stopped rather than left behind — the same reasoning as changing backend.
+   * Its volumes stay on disk: a project-scoped one (a database, typically) is not
+   * reachable under the new name, which is the cost the caller is choosing.
+   */
+  private async handleWorkspaceContainerScopeSetRequest(
+    workspaceId: string,
+    containerScope: "project" | "workspace",
+    requestId: string,
+  ): Promise<void> {
+    const logContext = { workspaceId, containerScope, requestId };
+    this.sessionLogger.info(logContext, "session: workspace.container_scope.set.request");
+    const emitResponse = (accepted: boolean, error: string | null) => {
+      this.emit({
+        type: "workspace.container_scope.set.response",
+        payload: { requestId, workspaceId, accepted, containerScope, error },
+      });
+    };
+
+    try {
+      const previous = await this.workspaceRegistry.get(workspaceId);
+      const updated = await this.workspaceRegistry.update(workspaceId, (existing) => ({
+        ...existing,
+        containerScope,
+        updatedAt: new Date().toISOString(),
+      }));
+      if (!updated) {
+        emitResponse(false, "Workspace not found");
+        return;
+      }
+      emitResponse(true, null);
+
+      if (previous && previous.containerScope !== containerScope && previous.containerBackend) {
+        const backend = this.containerBackends?.get(previous.containerBackend);
+        this.launchStrategyRegistry?.deactivateContainer(workspaceId);
+        await Promise.all(
+          this.agentManager
+            .listAgents()
+            .filter((agent) => agent.workspaceId === workspaceId)
+            .map((agent) => this.agentManager.stopAgentRuntime(agent.id).catch(() => undefined)),
+        );
+        this.terminalController.killTerminalsForWorkspace(workspaceId);
+        await backend
+          ?.stop(
+            { key: workspaceId, kind: "workspace", workspaceFolder: previous.cwd },
+            // Left running, it is a container nothing will ask for again.
+            { remove: true },
+          )
+          .catch((error: unknown) => {
+            this.sessionLogger.warn(
+              { err: error, workspaceId },
+              "Failed to stop container after container scope change",
+            );
+          });
+      }
+
+      await this.emitWorkspaceUpdatesForWorkspaceIds([workspaceId]);
+    } catch (error) {
+      this.sessionLogger.error(
+        { ...logContext, err: error },
+        "session: workspace.container_scope.set.request failed",
+      );
+      emitResponse(false, getErrorMessageOr(error, "Failed to set container scope"));
     }
   }
 
@@ -5200,6 +5287,7 @@ export class Session {
       ...resolveContainerStatus(this.launchStrategyRegistry, workspace),
       hasDevContainerConfig:
         this.containerBackends?.list().some((b) => b.hasConfig(workspace.cwd)) ?? false,
+      containerScope: workspace.containerScope,
       containerInfo: this.resolveContainerInfo(workspace),
     };
     return descriptor;
@@ -5272,6 +5360,7 @@ export class Session {
           ...ref,
           isWorktree: workspace.kind === "worktree",
           onProgress: this.containerProgressReporter("start", workspaceId),
+          ...this.composeProjectFor(workspace),
         });
         registry.activateContainer(key, cwd, handle);
         if (adopted) {
@@ -5446,6 +5535,7 @@ export class Session {
         kind: "workspace",
         workspaceFolder: cwd,
         onProgress: this.containerProgressReporter("restart", workspaceId),
+        ...this.composeProjectFor(workspace),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5569,6 +5659,7 @@ export class Session {
         kind: "workspace",
         workspaceFolder: cwd,
         onProgress: this.containerProgressReporter("rebuild", workspaceId),
+        ...this.composeProjectFor(workspace),
       });
       registry.activateContainer(workspaceId, cwd, handle);
       await this.reopenWorkspaceAgents(workspaceId);
@@ -5613,6 +5704,17 @@ export class Session {
    * the latest, and buffering them here would grow a per-workspace log nobody
    * reads.
    */
+  /**
+   * A compose project of this workspace's own, when it has asked to be isolated.
+   * Spread rather than passed as a possibly-undefined field, so a "project"
+   * workspace's CLI run has no `COMPOSE_PROJECT_NAME` in it at all and keeps
+   * landing where compose — and VS Code — would put it.
+   */
+  private composeProjectFor(workspace: PersistedWorkspaceRecord): { composeProject?: string } {
+    if (workspace.containerScope !== "workspace") return {};
+    return { composeProject: composeProjectNameFor(workspace.workspaceId) };
+  }
+
   private containerProgressReporter(
     operation: "start" | "restart" | "rebuild",
     workspaceId: string,

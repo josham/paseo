@@ -719,6 +719,13 @@ export const en = {
         restartConfirmTitle: "Restart container",
         restartConfirmMessage:
           "All running agents and terminals will be restarted. Restart the container?",
+        isolateAction: "Give this workspace its own container",
+        shareAction: "Share this checkout's container",
+        scopeConfirmTitle: "Change container isolation",
+        scopeIsolateConfirmMessage:
+          "This workspace gets its own container, built from scratch, plus its own copy of any service this project defines. Those start empty. The container it uses now is removed.",
+        scopeShareConfirmMessage:
+          "This workspace goes back to sharing one container per checkout. The container it has to itself is removed, along with data kept only inside it.",
       },
       toasts: {
         workspacePathUnavailable: "Workspace path is not available yet",

@@ -723,6 +723,13 @@ export const ar: TranslationResources = {
         restartConfirmTitle: "إعادة تشغيل الحاوية",
         restartConfirmMessage:
           "سيتم إعادة تشغيل جميع الوكلاء والمحطات الطرفية قيد التشغيل. هل تريد إعادة تشغيل الحاوية؟",
+        isolateAction: "منح مساحة العمل حاوية خاصة بها",
+        shareAction: "مشاركة حاوية هذه النسخة",
+        scopeConfirmTitle: "تغيير عزل الحاوية",
+        scopeIsolateConfirmMessage:
+          "تحصل مساحة العمل على حاوية خاصة بها تُبنى من الصفر، مع نسخة خاصة من أي خدمة يعرّفها هذا المشروع، وتبدأ فارغة. تُحذف الحاوية المستخدمة حاليًا.",
+        scopeShareConfirmMessage:
+          "تعود مساحة العمل إلى مشاركة حاوية واحدة لكل نسخة. تُحذف الحاوية الخاصة بها، ومعها البيانات المحفوظة داخلها فقط.",
       },
       toasts: {
         workspacePathUnavailable: "مسار Workspace غير متاح بعد",

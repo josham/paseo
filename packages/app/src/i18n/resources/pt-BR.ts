@@ -726,6 +726,13 @@ export const ptBR: TranslationResources = {
         restartConfirmTitle: "Reiniciar contêiner",
         restartConfirmMessage:
           "Todos os agentes e terminais em execução serão reiniciados. Reiniciar o contêiner?",
+        isolateAction: "Dar a este workspace um contêiner próprio",
+        shareAction: "Compartilhar o contêiner deste checkout",
+        scopeConfirmTitle: "Alterar o isolamento do contêiner",
+        scopeIsolateConfirmMessage:
+          "Este workspace passa a ter seu próprio contêiner, criado do zero, além de uma cópia própria de cada serviço definido pelo projeto. Essas cópias começam vazias. O contêiner usado agora é removido.",
+        scopeShareConfirmMessage:
+          "Este workspace volta a compartilhar um contêiner por checkout. O contêiner exclusivo dele é removido, junto com os dados guardados apenas dentro dele.",
       },
       toasts: {
         workspacePathUnavailable: "O caminho do workspace ainda não está disponível",
