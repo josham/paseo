@@ -24,11 +24,12 @@ devcontainer.local_folder = <workspace folder>     # what the CLI would infer
 devcontainer.config_file  = <devcontainer.json>    # what the CLI would infer
 paseo.container           = <workspaceId | probe:<uuid>>
 paseo.owner               = workspace | probe
+paseo.config_hash         = <hash of devcontainer.json + the build files it names>
 ```
 
 `--id-label` **replaces** the labels the CLI infers from the workspace folder, so the folder ones are re-supplied verbatim — other devcontainer tooling still recognises the container, and label filters are subset matches. The Paseo labels are what adoption queries on (`docker ps --filter label=paseo.container=<key> --filter label=devcontainer.local_folder=<folder>`), which is what makes the following true:
 
-- Two workspaces on the same directory get two containers instead of silently sharing one.
+- Two workspaces on the same directory get two containers instead of silently sharing one — for an image or Dockerfile config. A **compose** config is shared whatever these labels say, because compose owns identity there: see [A compose project is shared](#a-compose-project-is-shared).
 - A probe cannot adopt — or stop — a workspace's container, even for the same directory. Before this, probing a directory that already had a running workspace container would `docker stop` it out from under the running agents.
 - Abandoned probe containers are identifiable, so the daemon can reap them at startup.
 
@@ -179,14 +180,50 @@ Probe containers are deliberately **not** adopted by the workspace that gets cre
 
 ## Lifecycle
 
-- Containers **outlive the daemon**. On restart, `isAlreadyRunning` finds one by its `paseo.container` + `devcontainer.local_folder` labels and adopts it instead of rebuilding — same as VS Code's behavior. Both labels are matched: the key alone would also find a container created for that key against a different folder.
+- Containers **outlive the daemon**. On restart, `isAlreadyRunning` finds one by its `paseo.container` + `devcontainer.local_folder` labels and adopts it instead of rebuilding — same as VS Code's behavior. Both labels are matched: the key alone would also find a container created for that key against a different folder. A compose container may carry neither label; see [A compose project is shared](#a-compose-project-is-shared).
 - `up()` re-inspects a cached handle before reusing it, because containers get stopped or rebuilt from outside Paseo.
-- **Restart and rebuild reopen the workspace's agents.** A live session holds the strategy it opened with, and that strategy names the container by ID, so after a rebuild its next turn would fail with `No such container`. The reopen resumes from the provider's transcript, which a rebuild keeps only if the config mounts it at the path the agent wrote it to (see [Transcripts live where the agent ran](#transcripts-live-where-the-agent-ran)). A rebuild still kills the running provider process, and that surfaces as `exit code 137` in the timeline.
+- **Restart and rebuild reopen the workspace's agents.** A live session holds the strategy it opened with, and that strategy names the container by ID, so after a rebuild its next turn would fail with `No such container`. The reopen resumes from the provider's transcript, which a rebuild keeps only if the config mounts it at the path the agent wrote it to (see [Transcripts live where the agent ran](#transcripts-live-where-the-agent-ran)).
+- **Each agent's runtime is stopped before the container goes.** Killed along with it instead, the provider reported an unexplained `exit code 137` turn failure on an agent the user had only asked to rebuild around, ten seconds after the SIGTERM that PID 1 ignores. `AgentSession.stopRuntime` is optional; a provider that does not implement it keeps the old behaviour.
 - **Archiving a workspace stops its container**, as does switching the workspace off that backend. Unarchiving starts it again.
 - Availability (`devcontainer` + `docker` on PATH) is cached for 60s. Docker is routinely started after the daemon, so a negative answer must not stick for the process lifetime.
 - Probe containers are removed when their probe ends, and any that survive a daemon crash are reaped at the next startup (`removeAbandonedProbeContainers`).
-- `devcontainer.json` is watched; a hash change emits `container.config_changed` so the client can offer a rebuild.
+- **Staleness is judged on the build inputs, and on the container itself.** `getConfigHash` folds in the Dockerfile and compose files `devcontainer.json` names, because editing those changes what a container would be while the config's own bytes stay identical. That hash is stamped on the container as `paseo.config_hash`, and the check prefers what the container says it was built from over the hash persisted on the workspace — a workspace records its hash at creation and then adopts whatever container already existed, so the record can agree with the config while the container predates both. A container carrying no stamp was built elsewhere, and there the persisted hash is all there is. The config directory is watched, and a change emits `container.config_changed` so the client can offer a rebuild.
+- **`devcontainer up` output goes to `daemon.log`** for every start, restart and rebuild, at info. Only probes stream it to a client, so without this a build of any length left nothing behind but the line saying it had finished.
 - **Container details for the UI are captured when the container starts**, not queried per read. The workspace badge and the sidebar's container icon show backend, image, container name, user and start time, and a workspace descriptor is rebuilt on every workspace update — so a descriptor that queried the runtime, or that emitted an update once its answer arrived, would loop and burn a `docker inspect` per cycle. `getContainerInfo(key)` is a synchronous read of what `up` recorded.
+
+## A compose project is shared
+
+Paseo keys containers by workspace id, and for an image or Dockerfile config that
+is the whole story: each workspace gets its own container. A **compose** config
+does not work that way, and the difference is not Paseo's to choose. The CLI names
+the project after the workspace folder — `${basename(folder)}_devcontainer`, unless
+the compose file declares a top-level `name:` — and from there compose owns
+identity. Two things follow.
+
+**Every workspace on one checkout shares a container.** The workspace id buys no
+isolation here. That is also what VS Code does, and usually what is wanted: one
+database for one checkout.
+
+**Two checkouts whose folders share a name resolve to the same project**, so `up`
+hands back the container already serving the first one, mounts and all — an agent
+would run against another workspace's files while every surface reports it attached
+to this one. `assertContainerServesFolder` compares the `devcontainer.local_folder`
+label on what came back against the folder that was asked for and refuses on a
+mismatch, naming the folder actually being served. The naming is checked after the
+fact rather than predicted, because the derivation belongs to the CLI while the
+label on the container in hand is a fact. Fix it by renaming the directory or
+giving the project its own `name:`.
+
+A compose container may also carry **none of Paseo's labels**, because `up` reuses
+whatever compose already had and only the creator's `--id-label`s are on it —
+a container built by VS Code or a bare `devcontainer up` has no `paseo.container`.
+`findRunningContainerId` falls back to matching the folder for a container compose
+owns, guarded to one that is unclaimed or already this key's, so adoption and
+`stop` stop missing it.
+
+**A rebuild recreates the whole project**, not just the workspace's service. Data
+in a named volume survives, since nothing here runs `down -v`; a service with an
+anonymous volume loses it. Worth knowing before adding a service that keeps state.
 
 ## Transcripts live where the agent ran
 
@@ -271,4 +308,6 @@ behaves the same, which is what the docker-gated tests are for.
 - **Provider catalogs are fetched for every configured provider** during a probe, so a machine with several configured providers pays several in-container spawns per probe. Fetching only the selected provider's catalog would need the probe container to survive, which option B deliberately gives up.
 - **The provider snapshot is keyed by cwd**, so two workspaces sharing a directory with different backends overwrite each other's provider list. Fixing it properly means keying snapshots by workspace, which is a refactor beyond the container feature. The probe itself no longer contributes to this: it never writes the shared snapshot.
 - **A subdirectory workspace mounts the whole repository.** The devcontainer CLI's `--mount-workspace-git-root` defaults to **true**, and Paseo does not override it, so pointing a workspace at `repo/packages/app` mounts `repo` at `/workspaces/repo` and sets the workspace folder to `/workspaces/repo/packages/app` inside it. That is how git works in those containers — and it is more of the host than the workspace folder. `ContainerExecSpec.hostWorkspaceFolder` is still the workspace cwd, so `resolveCwd` treats a sibling directory as outside the workspace and falls back to the workspace folder, even though the sibling is genuinely present in the container.
+- **Build progress reaches no client outside the probe flow.** `up`, `restart` and `rebuild` log the CLI's output to `daemon.log`, but emit nothing, so a user watching a first build sees a spinner for minutes with no way to tell slow from stuck. The probe path's `container.probe.progress` is the shape a fix would take, plus a feature gate for it.
+- **A compose workspace cannot be isolated from the other workspaces on its checkout.** Identity belongs to compose, which derives it from the directory name. Paseo could take that over by generating a compose file carrying a `name:` of its own and handing the pair to the CLI through `--override-config`, which does work — at the cost of duplicating every sibling service and every project-scoped volume, so a fresh and empty database per workspace. It would have to be opt-in, and is not built.
 - **A worktree created inside a container is registered with container paths.** The admin directory persists in the host repo, but its `gitdir` names a path only the container had, so the host reads it as prunable and refuses to check that branch out (`already used by worktree at /workspaces/…`). If the worktree also landed outside the mount, its files are gone with the container. Paseo has no record of it either way.
