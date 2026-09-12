@@ -5673,6 +5673,26 @@ export class DaemonClient {
     });
   }
 
+  /**
+   * Subscribe to `devcontainer up` output for a workspace's own container.
+   * Unlike the probe's progress, this is not correlated to a request: a workspace
+   * opening starts its container without anyone asking, so the subscription is by
+   * workspace and outlives any one call. Returns the unsubscribe.
+   *
+   * Gate on `server_info.features.containerLifecycleProgress` before relying on
+   * it; an older daemon simply never sends any.
+   */
+  onContainerLifecycleProgress(
+    workspaceId: string,
+    handler: (progress: { operation: "start" | "restart" | "rebuild"; line: string }) => void,
+  ): () => void {
+    return this.on("container.lifecycle.progress", (message) => {
+      if (message.type !== "container.lifecycle.progress") return;
+      if (message.payload.workspaceId !== workspaceId) return;
+      handler({ operation: message.payload.operation, line: message.payload.line });
+    });
+  }
+
   async rebuildContainer(
     workspaceId: string,
     requestId?: string,
