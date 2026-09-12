@@ -34,3 +34,4 @@ pr/2452-pdf-preview  # Preview PDFs in the file panel (#2452, closed upstream, b
 pr/2396-ssh-lifecycle  # Install, launch and authenticate SSH remote hosts, on upstream's transport (#2396, closed upstream as superseded by #3989, bendavid)
 pr/2453-devcontainer  # Run agents and terminals inside a dev container (#2453, closed upstream, bendavid)
 edge/container-build-progress  # Container build output streamed to the client while a workspace's container starts, restarts or rebuilds (fork-only, stacked on pr/2453-devcontainer)
+edge/container-scope  # A workspace can have a compose stack of its own instead of sharing one per checkout (fork-only, stacked on edge/container-build-progress)
