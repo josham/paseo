@@ -102,6 +102,18 @@ export interface ContainerUpOptions extends ContainerRef {
    * agent's own git finds no repository at all.
    */
   isWorktree?: boolean;
+  /**
+   * Force the Docker Compose project this container belongs to, for a config
+   * that uses compose. Compose derives the project from the workspace folder's
+   * name, which makes the container shared by every workspace on that checkout
+   * and collides outright between two checkouts named the same. Naming it
+   * explicitly is the only way to get a container of one's own — there is no CLI
+   * flag for it, so the backend passes `COMPOSE_PROJECT_NAME`.
+   *
+   * Ignored by a config that does not use compose, which is already one
+   * container per key.
+   */
+  composeProject?: string;
 }
 
 export interface ContainerStopOptions {
