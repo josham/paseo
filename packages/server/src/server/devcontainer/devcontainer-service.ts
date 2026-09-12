@@ -81,7 +81,7 @@ interface DevContainerBackendDeps {
 interface DockerInspectResult {
   Name?: string;
   State?: { Running?: boolean; StartedAt?: string };
-  Config?: { Image?: string; User?: string };
+  Config?: { Image?: string; User?: string; Labels?: Record<string, string | undefined> };
   NetworkSettings?: {
     Gateway?: string;
     Networks?: Record<string, { Gateway?: string } | undefined>;
@@ -307,6 +307,33 @@ export function createDevContainerBackend(
     return runUp(options, false);
   }
 
+  /**
+   * Compose identifies a project by its **directory name**, so a second checkout
+   * whose folder is named the same resolves to the same project and `up` hands
+   * back the container already serving the first one — with that one's mounts.
+   * An agent would then run against another workspace's files while everything
+   * reports it attached to this one.
+   *
+   * Deliberately checked after the fact rather than by predicting the CLI's
+   * naming: the derivation is the CLI's business (folder basename, a compose
+   * file's own top-level `name`, …), while the label on what came back is a fact.
+   * Absent on a container old enough not to carry it, in which case there is
+   * nothing to compare and the launch proceeds as before.
+   */
+  function assertContainerServesFolder(
+    inspected: DockerInspectResult | null,
+    workspaceFolder: string,
+  ): void {
+    const served = inspected?.Config?.Labels?.[LOCAL_FOLDER_LABEL];
+    if (!served || served === workspaceFolder) return;
+    throw new Error(
+      `This configuration's container is already serving ${served}, not ${workspaceFolder}. ` +
+        "Docker Compose names a project after its directory, so two checkouts with the same " +
+        "directory name share one container. Rename this directory, or give the project its " +
+        "own name with a top-level `name:` in its compose file.",
+    );
+  }
+
   async function runUp(
     options: ContainerUpOptions,
     removeExisting: boolean,
@@ -350,6 +377,7 @@ export function createDevContainerBackend(
     }
 
     const inspected = await inspectContainer(parsed.containerId);
+    assertContainerServesFolder(inspected, workspaceFolder);
     const gateway = resolveHostGateway(inspected);
     const handle: ExecutionHandle = {
       identifier: parsed.containerId,
