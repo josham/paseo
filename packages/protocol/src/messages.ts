@@ -1077,6 +1077,22 @@ export const WorkspaceContainerBackendSetRequestSchema = z.object({
   requestId: z.string(),
 });
 
+/**
+ * Who names the Docker Compose project for this workspace. "project" leaves it to
+ * compose, which derives it from the checkout's directory — one stack per
+ * checkout, shared by every workspace on it, and what VS Code lands on.
+ * "workspace" gives this workspace a stack of its own, which duplicates every
+ * sibling service and every project-scoped volume with it.
+ */
+export const WorkspaceContainerScopeSchema = z.enum(["project", "workspace"]);
+
+export const WorkspaceContainerScopeSetRequestSchema = z.object({
+  type: z.literal("workspace.container_scope.set.request"),
+  workspaceId: z.string(),
+  containerScope: WorkspaceContainerScopeSchema,
+  requestId: z.string(),
+});
+
 export const WorkspaceRecoveryInspectRequestSchema = z.object({
   type: z.literal("workspace.recovery.inspect.request"),
   workspaceId: z.string(),
@@ -2060,6 +2076,19 @@ export const WorkspaceContainerBackendSetResponsePayloadSchema = z.object({
 export const WorkspaceContainerBackendSetResponseSchema = z.object({
   type: z.literal("workspace.container_backend.set.response"),
   payload: WorkspaceContainerBackendSetResponsePayloadSchema,
+});
+
+export const WorkspaceContainerScopeSetResponsePayloadSchema = z.object({
+  requestId: z.string(),
+  workspaceId: z.string(),
+  accepted: z.boolean(),
+  containerScope: WorkspaceContainerScopeSchema,
+  error: z.string().nullable(),
+});
+
+export const WorkspaceContainerScopeSetResponseSchema = z.object({
+  type: z.literal("workspace.container_scope.set.response"),
+  payload: WorkspaceContainerScopeSetResponsePayloadSchema,
 });
 
 export const WorkspaceRecoveryStateSchema = z.discriminatedUnion("kind", [
@@ -3221,6 +3250,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceLabelDeleteRequestSchema,
   WorkspaceLabelDeleteInspectRequestSchema,
   WorkspaceContainerBackendSetRequestSchema,
+  WorkspaceContainerScopeSetRequestSchema,
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
@@ -3566,6 +3596,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentRequestReceipts: z.boolean().optional(),
         // COMPAT(containerLifecycleProgress): added in v0.7.3; remove gate after 2027-09-11.
         containerLifecycleProgress: z.boolean().optional(),
+        // COMPAT(containerScope): added in v0.7.3; remove gate after 2027-09-11.
+        containerScope: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.7.3; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
@@ -4059,6 +4091,10 @@ export const WorkspaceDescriptorPayloadSchema = z
     // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
     // The selected container backend for this workspace. Absent means "host".
     containerBackend: z.string().nullable().optional(),
+    // COMPAT(containerScope): added in v0.7.3, remove gate after 2027-09-11.
+    // Who names this workspace's compose project. Absent on older daemons, where
+    // "project" — compose's own naming — was the only behaviour.
+    containerScope: WorkspaceContainerScopeSchema.optional(),
     // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
     // Whether this workspace is running inside an isolated execution environment
     // (dev container, pod, VM, etc.). Absent means local execution (old daemons).
@@ -6722,6 +6758,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceTitleSetResponseSchema,
   WorkspacePinSetResponseSchema,
   WorkspaceContainerBackendSetResponseSchema,
+  WorkspaceContainerScopeSetResponseSchema,
   WorkspaceRecoveryInspectResponseSchema,
   WorkspaceRecoveryRestoreResponseSchema,
   WaitForFinishResponseMessageSchema,

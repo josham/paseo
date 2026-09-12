@@ -723,6 +723,13 @@ export const ko: TranslationResources = {
         restartConfirmTitle: "컨테이너 다시 시작",
         restartConfirmMessage:
           "실행 중인 모든 에이전트와 터미널이 다시 시작됩니다. 컨테이너를 다시 시작할까요?",
+        isolateAction: "이 워크스페이스에 전용 컨테이너 사용",
+        shareAction: "이 체크아웃의 컨테이너 공유",
+        scopeConfirmTitle: "컨테이너 격리 변경",
+        scopeIsolateConfirmMessage:
+          "이 워크스페이스는 처음부터 빌드된 전용 컨테이너와, 프로젝트가 정의한 각 서비스의 전용 복사본을 갖게 됩니다. 해당 복사본은 비어 있는 상태로 시작합니다. 현재 사용 중인 컨테이너는 삭제됩니다.",
+        scopeShareConfirmMessage:
+          "체크아웃마다 컨테이너 하나를 공유하는 방식으로 돌아갑니다. 전용 컨테이너는 삭제되며, 그 안에만 저장된 데이터도 함께 사라집니다.",
       },
       toasts: {
         workspacePathUnavailable: "워크스페이스 경로를 아직 사용할 수 없습니다",

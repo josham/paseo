@@ -725,6 +725,13 @@ export const ja: TranslationResources = {
         restartConfirmTitle: "コンテナを再起動",
         restartConfirmMessage:
           "実行中のすべてのエージェントとターミナルが再起動されます。コンテナを再起動しますか？",
+        isolateAction: "このワークスペース専用のコンテナを使う",
+        shareAction: "このチェックアウトのコンテナを共有する",
+        scopeConfirmTitle: "コンテナの分離設定を変更",
+        scopeIsolateConfirmMessage:
+          "このワークスペース専用のコンテナをゼロからビルドし、プロジェクトが定義する各サービスも専用に用意します。それらは空の状態で始まります。現在使用中のコンテナは削除されます。",
+        scopeShareConfirmMessage:
+          "チェックアウトごとに 1 つのコンテナを共有する状態に戻します。専用だったコンテナは削除され、その中だけに保存されていたデータも失われます。",
       },
       toasts: {
         workspacePathUnavailable: "ワークスペースパスはまだ利用できません",

@@ -715,6 +715,13 @@ export const zhCN: TranslationResources = {
         rebuildConfirmMessage: "所有正在运行的代理和终端都将被停止。是否重新构建容器？",
         restartConfirmTitle: "重启容器",
         restartConfirmMessage: "所有正在运行的代理和终端都将被重启。是否重启容器？",
+        isolateAction: "为此工作区使用独立容器",
+        shareAction: "共享此检出的容器",
+        scopeConfirmTitle: "更改容器隔离方式",
+        scopeIsolateConfirmMessage:
+          "此工作区将获得从头构建的独立容器，以及该项目定义的每个服务的独立副本，这些副本从空白开始。当前使用的容器会被移除。",
+        scopeShareConfirmMessage:
+          "此工作区将回到每个检出共享一个容器的方式。它独占的容器会被移除，仅保存在该容器内的数据也会一并丢失。",
       },
       toasts: {
         workspacePathUnavailable: "Workspace 路径尚不可用",

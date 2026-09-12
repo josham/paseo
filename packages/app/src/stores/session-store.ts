@@ -126,6 +126,7 @@ export interface WorkspaceDescriptor {
   githubRuntime?: WorkspaceDescriptorPayload["githubRuntime"];
   forge?: WorkspaceDescriptorPayload["forge"];
   containerBackend?: string | null;
+  containerScope?: WorkspaceDescriptorPayload["containerScope"];
   containerStatus?: WorkspaceDescriptorPayload["containerStatus"];
   hasDevContainerConfig?: WorkspaceDescriptorPayload["hasDevContainerConfig"];
   containerInfo?: WorkspaceDescriptorPayload["containerInfo"];
@@ -167,6 +168,7 @@ export function normalizeWorkspaceDescriptor(
     gitRuntime: payload.gitRuntime,
     hasDevContainerConfig: payload.hasDevContainerConfig,
     containerBackend: payload.containerBackend,
+    containerScope: payload.containerScope,
     containerStatus: payload.containerStatus,
     containerInfo: payload.containerInfo,
     project: payload.project,
