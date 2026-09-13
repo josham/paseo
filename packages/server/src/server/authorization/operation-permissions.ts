@@ -285,6 +285,7 @@ const OUTBOUND_PERMISSION = {
   "container.availability.response": "workspace.read",
   "container.config_changed": "workspace.read",
   "container.probe.progress": "workspace.write",
+  "container.lifecycle.progress": "workspace.write",
   "container.probe.response": "workspace.write",
   "container.rebuild.response": "workspace.write",
   "container.restart.response": "workspace.write",
