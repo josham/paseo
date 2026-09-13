@@ -77,7 +77,14 @@ merge_branch() {
     mapfile -t unmerged < <(git ls-files --unmerged | awk '{ print $4 }' | sort -u)
     replayed=$(( ${#unmerged[@]} > 0 ))
     for path in "${unmerged[@]}"; do
-      if [[ ! -f "$path" ]] || grep -q '^<<<<<<< ' "$path"; then
+      # A *binary* conflict looks exactly like a replayed resolution: git writes
+      # the "ours" side out and adds no markers, so the two tests below both pass
+      # while the branch being merged has silently lost its version of the file.
+      # rerere cannot record a binary resolution either, so it would recur on
+      # every rebuild, unreported. `grep -I` treats a binary file as
+      # non-matching, which is how this tells the two apart; an empty file
+      # answers the same way and is likewise worth stopping for.
+      if [[ ! -f "$path" ]] || ! grep -Iq . "$path" || grep -q '^<<<<<<< ' "$path"; then
         replayed=0
         break
       fi
