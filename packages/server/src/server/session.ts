@@ -6045,6 +6045,16 @@ export class Session {
         { err: error, workspaceId, cwd },
         "Failed to restart dev container for workspace",
       );
+      // The old container was already stopped — and for a rebuild, removed —
+      // before this failed, so the registry is holding a strategy that names a
+      // container nobody can exec into. Left active, the next turn reports the
+      // docker error for a missing container; deactivated, it fails as
+      // ContainerNotRunningError, which is the same answer a container that
+      // never started gives. Reopening is best-effort: the agents' runtimes were
+      // stopped on the way in and must not keep addressing the dead container.
+      registry.deactivateContainer(workspaceId);
+      await this.reopenWorkspaceAgents(workspaceId);
+      void this.emitWorkspaceUpdateForWorkspaceId(workspaceId);
       this.emit({
         type: "container.restart.response",
         payload: {
@@ -6168,6 +6178,16 @@ export class Session {
         { err: error, workspaceId, cwd },
         "Failed to rebuild dev container for workspace",
       );
+      // The old container was already stopped — and for a rebuild, removed —
+      // before this failed, so the registry is holding a strategy that names a
+      // container nobody can exec into. Left active, the next turn reports the
+      // docker error for a missing container; deactivated, it fails as
+      // ContainerNotRunningError, which is the same answer a container that
+      // never started gives. Reopening is best-effort: the agents' runtimes were
+      // stopped on the way in and must not keep addressing the dead container.
+      registry.deactivateContainer(workspaceId);
+      await this.reopenWorkspaceAgents(workspaceId);
+      void this.emitWorkspaceUpdateForWorkspaceId(workspaceId);
       this.emit({
         type: "container.rebuild.response",
         payload: {
