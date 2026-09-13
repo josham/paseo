@@ -497,6 +497,11 @@ export function createDevContainerBackend(
     // only that one.
     const identifier = handles.get(ref.key)?.identifier ?? (await findRunningContainerId(ref));
     handles.delete(ref.key);
+    // The stamp describes the container being stopped. Left behind, it answers
+    // for a container that no longer exists: checkContainerConfigStaleness would
+    // return on it and never consult the persisted record, so a later config edit
+    // either offers a rebuild for nothing or suppresses a real warning.
+    containerConfigHashByKey.delete(ref.key);
     if (!identifier) {
       if (options?.remove) await removeContainer(ref);
       return;
@@ -569,6 +574,7 @@ export function createDevContainerBackend(
           if (handle.identifier !== identifier) continue;
           handles.delete(key);
           containerInfoByKey.delete(key);
+          containerConfigHashByKey.delete(key);
         }
       } catch (error) {
         logger.warn({ err: error, identifier }, "Failed to remove abandoned probe container");
