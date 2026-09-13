@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
+import pino from "pino";
+
 import {
   checkProviderLaunchAvailable,
+  isCommandAvailableInContainer,
   createProviderEnv,
   migrateProviderSettings,
   ProviderOverrideSchema,
@@ -436,5 +439,51 @@ describe("migrateProviderSettings", () => {
         },
       },
     });
+  });
+});
+
+describe("provider availability inside a container", () => {
+  /** A real pino writing to memory, so the assertions read the shipped output. */
+  function createCapturingLogger(): { logger: pino.Logger; lines: Record<string, unknown>[] } {
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(
+      { level: "debug" },
+      { write: (line: string) => void lines.push(JSON.parse(line)) },
+    );
+    return { logger, lines };
+  }
+
+  test("a command the container resolves is available", async () => {
+    const { logger, lines } = createCapturingLogger();
+
+    const available = await isCommandAvailableInContainer({
+      strategy: { resolveExecutable: async (command) => `/usr/local/bin/${command}` },
+      command: "claude",
+      logger,
+    });
+
+    expect(available).toBe(true);
+    expect(lines).toEqual([]);
+  });
+
+  test("a command the container rejects is unavailable, and says why in the log", async () => {
+    // The exec failure is the only account of what went wrong: the caller gets
+    // a bare false, and the user gets "Provider 'claude' is not available".
+    const { logger, lines } = createCapturingLogger();
+
+    const available = await isCommandAvailableInContainer({
+      strategy: {
+        resolveExecutable: async () => {
+          throw new Error('chdir to cwd ("/home/dev/repo") set in config.json failed');
+        },
+      },
+      command: "claude",
+      logger,
+    });
+
+    expect(available).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ command: "claude" });
+    expect(JSON.stringify(lines[0])).toContain("chdir to cwd");
   });
 });

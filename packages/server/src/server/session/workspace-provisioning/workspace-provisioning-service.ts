@@ -48,6 +48,7 @@ export interface CreateWorktreeWorkspaceInput {
   title: string | null;
   expectsInitialAgent?: boolean;
   untrustedSource?: UntrustedWorkspaceSource;
+  containerBackend?: string | null;
 }
 
 export interface WorkspaceProvisioningService {
@@ -62,6 +63,7 @@ export interface WorkspaceProvisioningService {
     title?: string | null,
     projectId?: string,
     context?: { expectsInitialAgent?: boolean },
+    containerBackend?: string | null,
   ): Promise<PersistedWorkspaceRecord>;
   createWorkspaceForWorktree(
     input: CreateWorktreeWorkspaceInput,
@@ -196,12 +198,12 @@ export function createWorkspaceProvisioningService(deps: {
     if (project.archivedAt) throw new WorkspaceProvisioningError("archived_project", projectId);
     return project;
   }
-
   async function createWorkspaceForDirectory(
     cwd: string,
     title?: string | null,
     projectId?: string,
     context?: { expectsInitialAgent?: boolean },
+    containerBackend?: string | null,
   ): Promise<PersistedWorkspaceRecord> {
     const normalizedCwd = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(normalizedCwd);
@@ -217,6 +219,7 @@ export function createWorkspaceProvisioningService(deps: {
       title: title?.trim() || null,
       createdAt: timestamp,
       updatedAt: timestamp,
+      containerBackend,
     });
     await workspaceRegistry.upsert(workspace, context);
     deps.lifecycle?.emit("workspace.created", { workspace: describeHookWorkspace(workspace) });
@@ -251,6 +254,7 @@ export function createWorkspaceProvisioningService(deps: {
       createdAt: timestamp,
       updatedAt: timestamp,
       ...(input.untrustedSource ? { untrustedSource: input.untrustedSource } : {}),
+      containerBackend: input.containerBackend,
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: input.expectsInitialAgent,

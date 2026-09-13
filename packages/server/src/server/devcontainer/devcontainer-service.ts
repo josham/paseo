@@ -1,0 +1,823 @@
+import { dirname, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import type { Logger } from "pino";
+import { execCommand } from "../../utils/spawn.js";
+import {
+  executableExists,
+  isCommandAvailable,
+} from "../../executable-resolution/executable-resolution.js";
+import { discoverDevContainerConfig } from "./config-discovery.js";
+import { readConfigurationKeepsHostPath } from "./relative-worktrees.js";
+import type {
+  ContainerBackend,
+  ContainerInfo,
+  ContainerRef,
+  ContainerStopOptions,
+  ContainerUpOptions,
+  ExecutionHandle,
+} from "./container-backend.js";
+import { ContainerExecLaunchStrategy } from "./launch-strategy.js";
+import type { LaunchStrategyFactory } from "./launch-strategy-registry.js";
+
+/**
+ * DevContainerBackend — manages dev container lifecycle by shelling out to
+ * the @devcontainers/cli reference implementation (the `devcontainer` binary).
+ *
+ * The CLI handles all spec complexity: Features, image metadata merge, variable
+ * substitution, Docker Compose, UID/GID sync, lifecycle scripts, and user/env
+ * probing. This backend is a thin wrapper that maps Paseo workspace concepts
+ * onto the CLI's up/stop commands.
+ *
+ * See: https://containers.dev/implementors/spec/
+ * See: https://github.com/devcontainers/cli
+ */
+
+/**
+ * Identity labels. Passing `--id-label` replaces the set the CLI would infer
+ * from the workspace folder, so the folder labels are re-supplied verbatim —
+ * other devcontainer tooling (and our own folder queries) still recognise the
+ * container — and Paseo's own labels are added alongside.
+ *
+ * `paseo.container` is what makes the in-memory key and the container's real
+ * identity the same thing: two workspaces sharing a cwd get two containers, and
+ * a probe can never adopt (or stop) a workspace's container.
+ */
+const LOCAL_FOLDER_LABEL = "devcontainer.local_folder";
+const CONFIG_FILE_LABEL = "devcontainer.config_file";
+const CONTAINER_KEY_LABEL = "paseo.container";
+// Set by compose itself, so its presence is how a shared container is told from
+// one this daemon owns outright. See findAdoptableComposeContainerId.
+const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
+// Stamped at creation so an adopted container can be judged against the config as
+// it stands now. The persisted workspace hash cannot answer for a container this
+// daemon did not build — a fresh workspace records today's hash and learns nothing
+// about the container it then adopts.
+const CONFIG_HASH_LABEL = "paseo.config_hash";
+const CONTAINER_OWNER_LABEL = "paseo.owner";
+
+/**
+ * How long an availability probe is trusted. Docker is routinely started after
+ * the daemon, so a negative result must not stick for the whole process life.
+ */
+const AVAILABILITY_CACHE_MS = 60_000;
+
+/** Ceiling for a single `devcontainer up`; a first build pulls and provisions. */
+const CLI_TIMEOUT_MS = 300_000;
+
+/**
+ * Ceiling for `devcontainer read-configuration`, which reads and substitutes
+ * files and starts nothing. It runs in the middle of creating a worktree, so a
+ * CLI that hangs has to give up quickly and let the worktree be made the safe
+ * way instead.
+ */
+const READ_CONFIGURATION_TIMEOUT_MS = 15_000;
+
+interface DevContainerBackendDeps {
+  logger: Logger;
+  /** Override the devcontainer binary path (defaults to "devcontainer" on PATH) */
+  binaryPath?: string;
+  /** Override the docker binary path (defaults to "docker" on PATH) */
+  dockerBinaryPath?: string;
+}
+
+interface DockerInspectResult {
+  Name?: string;
+  State?: { Running?: boolean; StartedAt?: string };
+  Config?: { Image?: string; User?: string; Labels?: Record<string, string | undefined> };
+  NetworkSettings?: {
+    Gateway?: string;
+    Networks?: Record<string, { Gateway?: string } | undefined>;
+  };
+}
+
+export function createDevContainerBackend(
+  deps: DevContainerBackendDeps,
+): ContainerBackend & { createStrategy: LaunchStrategyFactory } {
+  const logger = deps.logger.child({ module: "devcontainer-backend" });
+  const devcontainerBin = deps.binaryPath ?? resolveDevContainerBinary();
+  const dockerBin = deps.dockerBinaryPath ?? "docker";
+
+  // Per-workspace handles, keyed by the opaque workspace key (workspaceId
+  // or a synthetic probe key). The workspaceFolder is still used for CLI
+  // args and config discovery, but is no longer the map key.
+  const handles = new Map<string, ExecutionHandle>();
+  // Captured at start time. Workspace descriptors are rebuilt on every workspace
+  // update, so the UI's container details cannot be a per-build docker query.
+  const containerInfoByKey = new Map<string, ContainerInfo>();
+  // The config hash each running container was stamped with, or null when it
+  // carries none — a container built by VS Code or a bare `devcontainer up`.
+  const containerConfigHashByKey = new Map<string, string | null>();
+  let availabilityCache: { available: boolean; checkedAt: number } | null = null;
+
+  async function isAvailable(): Promise<boolean> {
+    if (availabilityCache && Date.now() - availabilityCache.checkedAt < AVAILABILITY_CACHE_MS) {
+      return availabilityCache.available;
+    }
+    let available: boolean;
+    try {
+      // A resolved path is checked as a path; a bare name is looked up on
+      // PATH. Not with `which`, which is not a command on Windows — a daemon
+      // there would report no container backend however much Docker it has.
+      const isPath = devcontainerBin.includes("/") || devcontainerBin.includes("\\");
+      const devcontainerFound = isPath
+        ? executableExists(devcontainerBin) !== null
+        : await isCommandAvailable(devcontainerBin);
+      available = devcontainerFound && (await isCommandAvailable(dockerBin));
+    } catch {
+      available = false;
+    }
+    availabilityCache = { available, checkedAt: Date.now() };
+    logger.debug({ available, devcontainerBin, dockerBin }, "Dev container availability check");
+    return available;
+  }
+
+  function hasConfig(workspaceFolder: string): boolean {
+    return discoverDevContainerConfig(workspaceFolder) !== null;
+  }
+
+  function getHandle(key: string): ExecutionHandle | null {
+    return handles.get(key) ?? null;
+  }
+
+  async function inspectContainer(identifier: string): Promise<DockerInspectResult | null> {
+    try {
+      const result = await execCommand(
+        dockerBin,
+        ["inspect", "--format", "{{json .}}", identifier],
+        { envMode: "internal", timeout: 10_000 },
+      );
+      return JSON.parse(result.stdout.trim()) as DockerInspectResult;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Find a container this key already owns — one left running by a previous
+   * daemon, typically. The query is on our identity label, so it can never
+   * return a container belonging to another workspace or to a probe.
+   */
+  async function findRunningContainerId(ref: ContainerRef): Promise<string | null> {
+    // Both halves of the identity we stamp on: the key alone would also match a
+    // container created for the same key against a different folder.
+    const owned = await findContainerId(
+      [
+        `label=${CONTAINER_KEY_LABEL}=${ref.key}`,
+        `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+      ],
+      { includeStopped: false },
+    );
+    if (owned) return owned;
+    return findAdoptableComposeContainerId(ref, { includeStopped: false });
+  }
+
+  /**
+   * A compose project's container is shared, and `up` reuses whatever compose
+   * already has for the project regardless of who created it — VS Code, a bare
+   * `devcontainer up`, an earlier daemon. Only the creator's id-labels are on it,
+   * so one made outside Paseo carries no `paseo.container` at all and the
+   * identity query above cannot see it. The daemon then believes there is no
+   * container while plainly using one, which costs it adoption on restart and
+   * makes `stop` a no-op — an archived workspace leaves its container running.
+   *
+   * Matching on the folder alone is only safe because compose is what makes the
+   * container shared in the first place: two workspaces on one folder get one
+   * compose container anyway, where two image-based configs would get their own.
+   * Hence both guards — the candidate has to be compose's, and unclaimed or
+   * already ours, never a container another key stamped.
+   */
+  async function findAdoptableComposeContainerId(
+    ref: ContainerRef,
+    options: { includeStopped: boolean },
+  ): Promise<string | null> {
+    const [first] = await listAdoptableComposeContainerIds(ref, options);
+    return first ?? null;
+  }
+
+  async function listAdoptableComposeContainerIds(
+    ref: ContainerRef,
+    options: { includeStopped: boolean },
+  ): Promise<string[]> {
+    try {
+      const result = await execCommand(
+        dockerBin,
+        [
+          "ps",
+          "--no-trunc",
+          ...(options.includeStopped ? ["-a"] : []),
+          "--filter",
+          `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+          "--filter",
+          `label=${COMPOSE_PROJECT_LABEL}`,
+          "--format",
+          `{{.ID}} {{.Label "${CONTAINER_KEY_LABEL}"}}`,
+        ],
+        { envMode: "internal", timeout: 10_000 },
+      );
+      return result.stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [id, key] = line.trim().split(/\s+/);
+          return { id: id ?? "", key: key ?? "" };
+        })
+        .filter((entry) => entry.id !== "" && (entry.key === "" || entry.key === ref.key))
+        .map((entry) => entry.id);
+    } catch {
+      return [];
+    }
+  }
+
+  async function findContainerId(
+    filters: string[],
+    options: { includeStopped: boolean },
+  ): Promise<string | null> {
+    const [first] = await listContainerIds(filters, options);
+    return first ?? null;
+  }
+
+  async function listContainerIds(
+    filters: string[],
+    options: { includeStopped: boolean },
+  ): Promise<string[]> {
+    try {
+      const result = await execCommand(
+        dockerBin,
+        [
+          "ps",
+          "-q",
+          // Full IDs, so they compare equal to the ones the CLI reports in its
+          // up result — a short ID would silently never match a handle.
+          "--no-trunc",
+          ...(options.includeStopped ? ["-a"] : []),
+          ...filters.flatMap((f) => ["--filter", f]),
+        ],
+        { envMode: "internal", timeout: 10_000 },
+      );
+      return result.stdout.trim().split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * `--id-label` is not only a stamp: when it is supplied, the CLI *finds* the
+   * container to reuse by requiring every one of these labels to match. So the
+   * set has to be things that identify the workspace, never things that change
+   * with the config — a volatile label means a config edit finds nothing, and
+   * the CLI quietly builds a second container and leaves the first running.
+   *
+   * `stampConfigHash` is therefore set only when this call is going to create a
+   * container anyway (nothing to reuse, or a rebuild that removes what is
+   * there). Reusing is safe without it because docker label filters are subset
+   * matches: the four stable labels still find a container carrying a fifth,
+   * whatever hash it was stamped with — which is exactly what lets
+   * `container.config_changed` offer a rebuild instead of performing one.
+   */
+  function buildIdLabelArgs(
+    ref: ContainerRef,
+    configPath: string,
+    options: { stampConfigHash: boolean },
+  ): string[] {
+    if (ref.kind !== "workspace" && ref.kind !== "probe") {
+      // The owner label is how the reaper recognises a probe container. A bad
+      // one is invisible to it, so the container would leak for good — fail at
+      // creation rather than at cleanup time.
+      throw new Error(`Container ref ${ref.key} has an invalid kind: ${String(ref.kind)}`);
+    }
+    const configHash = options.stampConfigHash ? getConfigHash(ref.workspaceFolder) : null;
+    return [
+      "--id-label",
+      `${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+      "--id-label",
+      `${CONFIG_FILE_LABEL}=${configPath}`,
+      "--id-label",
+      `${CONTAINER_KEY_LABEL}=${ref.key}`,
+      "--id-label",
+      `${CONTAINER_OWNER_LABEL}=${ref.kind}`,
+      ...(configHash ? ["--id-label", `${CONFIG_HASH_LABEL}=${configHash}`] : []),
+    ];
+  }
+
+  /**
+   * The address the container reaches the host on. Daemon-hosted endpoints
+   * (agent MCP, terminal activity) are only reachable through it, and only
+   * when the daemon binds something other than loopback.
+   */
+  function resolveHostGateway(inspected: DockerInspectResult | null): string | undefined {
+    if (!inspected) return undefined;
+    const direct = inspected.NetworkSettings?.Gateway;
+    if (direct) return direct;
+    for (const network of Object.values(inspected.NetworkSettings?.Networks ?? {})) {
+      if (network?.Gateway) return network.Gateway;
+    }
+    return undefined;
+  }
+
+  async function up(options: ContainerUpOptions): Promise<ExecutionHandle> {
+    const existing = handles.get(options.key);
+    if (existing) {
+      // A container can stop or be removed out from under us (docker stop, a
+      // VS Code rebuild, a machine sleep). A stale handle would send every
+      // later exec into a container that no longer exists.
+      const inspected = await inspectContainer(existing.identifier);
+      if (inspected?.State?.Running) return existing;
+      logger.info(
+        { key: options.key, identifier: existing.identifier },
+        "Cached dev container is no longer running, starting it again",
+      );
+      handles.delete(options.key);
+    }
+    return runUp(options, false);
+  }
+
+  /**
+   * Compose identifies a project by its **directory name**, so a second checkout
+   * whose folder is named the same resolves to the same project and `up` hands
+   * back the container already serving the first one — with that one's mounts.
+   * An agent would then run against another workspace's files while everything
+   * reports it attached to this one.
+   *
+   * Deliberately checked after the fact rather than by predicting the CLI's
+   * naming: the derivation is the CLI's business (folder basename, a compose
+   * file's own top-level `name`, …), while the label on what came back is a fact.
+   * Absent on a container old enough not to carry it, in which case there is
+   * nothing to compare and the launch proceeds as before.
+   */
+  function assertContainerServesFolder(
+    inspected: DockerInspectResult | null,
+    workspaceFolder: string,
+  ): void {
+    const served = inspected?.Config?.Labels?.[LOCAL_FOLDER_LABEL];
+    if (!served || served === workspaceFolder) return;
+    throw new Error(
+      `This configuration's container is already serving ${served}, not ${workspaceFolder}. ` +
+        "Docker Compose names a project after its directory, so two checkouts with the same " +
+        "directory name share one container. Rename this directory, or give the project its " +
+        "own name with a top-level `name:` in its compose file.",
+    );
+  }
+
+  async function runUp(
+    options: ContainerUpOptions,
+    removeExisting: boolean,
+  ): Promise<ExecutionHandle> {
+    const workspaceFolder = resolve(options.workspaceFolder);
+    const config = discoverDevContainerConfig(workspaceFolder);
+    if (!config) {
+      throw new Error(`No devcontainer.json found in ${workspaceFolder}`);
+    }
+
+    logger.info(
+      { key: options.key, workspaceFolder, configPath: config.configPath },
+      removeExisting ? "Rebuilding dev container" : "Starting dev container",
+    );
+
+    // A rebuild removes what is there, so it always creates. Otherwise the stamp
+    // goes on only when there is nothing to reuse — see buildIdLabelArgs.
+    const reusable = removeExisting ? null : await findRunningContainerId(options);
+    const args = [
+      "up",
+      "--workspace-folder",
+      workspaceFolder,
+      ...buildIdLabelArgs(options, config.configPath, {
+        stampConfigHash: reusable === null,
+      }),
+      "--log-level",
+      "info",
+    ];
+    if (removeExisting) {
+      args.push("--remove-existing-container");
+    }
+    // A linked worktree keeps its git directory outside the workspace folder,
+    // so without this the agent's own git finds no repository. The CLI only
+    // acts on it when the worktree's links are relative, which is decided when
+    // the worktree is created.
+    if (options.isWorktree) {
+      args.push("--mount-git-worktree-common-dir");
+    }
+
+    const result = await runDevContainerCli(args, options);
+    const parsed = parseDevContainerUpResult(result.stdout);
+    if (!parsed) {
+      throw new Error(
+        `devcontainer up did not return a valid JSON result: ${result.stderr.slice(-2000)}`,
+      );
+    }
+
+    const inspected = await inspectContainer(parsed.containerId);
+    assertContainerServesFolder(inspected, workspaceFolder);
+    const gateway = resolveHostGateway(inspected);
+    const handle: ExecutionHandle = {
+      identifier: parsed.containerId,
+      remoteUser: parsed.remoteUser,
+      remoteWorkspaceFolder: parsed.remoteWorkspaceFolder,
+      ...(gateway ? { hostGatewayAddress: gateway } : {}),
+    };
+
+    handles.set(options.key, handle);
+    containerInfoByKey.set(options.key, buildContainerInfo(handle, inspected));
+    // What the container itself says it was built from, which for an adopted one
+    // is not necessarily what this daemon would build now.
+    containerConfigHashByKey.set(
+      options.key,
+      inspected?.Config?.Labels?.[CONFIG_HASH_LABEL] ?? null,
+    );
+    logger.info(
+      { workspaceFolder, identifier: handle.identifier, remoteUser: handle.remoteUser },
+      "Dev container started",
+    );
+
+    return handle;
+  }
+
+  /**
+   * Run the CLI with its output streamed rather than buffered: a first build
+   * pulls an image and runs lifecycle scripts for minutes, and the caller needs
+   * to show that as it happens instead of after the fact. stdout is collected
+   * whole because the final line is the JSON result.
+   */
+  function runDevContainerCli(
+    args: string[],
+    options: Pick<ContainerUpOptions, "onProgress" | "signal">,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolveRun, rejectRun) => {
+      const child = spawn(devcontainerBin, args, {
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let stderrLineBuffer = "";
+      const timer = setTimeout(() => child.kill(), CLI_TIMEOUT_MS);
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        if (!options.onProgress) return;
+        stderrLineBuffer += text;
+        const lines = stderrLineBuffer.split("\n");
+        stderrLineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed) options.onProgress(trimmed);
+        }
+      });
+
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        rejectRun(new Error(`devcontainer up failed: ${error.message}`, { cause: error }));
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        const trailing = stderrLineBuffer.trim();
+        if (trailing) options.onProgress?.(trailing);
+        if (code === 0) {
+          resolveRun({ stdout, stderr });
+          return;
+        }
+        rejectRun(new Error(`devcontainer up failed: ${stderr.trim().slice(-2000)}`));
+      });
+    });
+  }
+
+  async function stop(ref: ContainerRef, options?: ContainerStopOptions): Promise<void> {
+    // Containers outlive the daemon, so the one to stop is not always in the
+    // handle map — the identity label finds the container this key owns, and
+    // only that one.
+    const identifier = handles.get(ref.key)?.identifier ?? (await findRunningContainerId(ref));
+    handles.delete(ref.key);
+    // The stamp describes the container being stopped. Left behind, it answers
+    // for a container that no longer exists: checkContainerConfigStaleness would
+    // return on it and never consult the persisted record, so a later config edit
+    // either offers a rebuild for nothing or suppresses a real warning.
+    containerConfigHashByKey.delete(ref.key);
+    if (!identifier) {
+      if (options?.remove) await removeContainer(ref);
+      return;
+    }
+
+    logger.info(
+      { key: ref.key, identifier, remove: options?.remove === true },
+      "Stopping dev container",
+    );
+    try {
+      await execCommand(dockerBin, ["stop", identifier], {
+        envMode: "internal",
+        timeout: 30_000,
+      });
+    } catch (error) {
+      logger.warn({ err: error, identifier }, "Failed to stop dev container");
+    }
+    if (options?.remove) await removeContainer(ref);
+  }
+
+  /** Delete the container for a key, running or not. */
+  async function removeContainer(ref: ContainerRef): Promise<void> {
+    const identifiers = [
+      ...new Set([
+        ...(await listContainerIds(
+          [
+            `label=${CONTAINER_KEY_LABEL}=${ref.key}`,
+            `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
+          ],
+          { includeStopped: true },
+        )),
+        // The compose container this workspace has been using may be one it
+        // never labelled; leaving it behind is what a rebuild is meant to undo.
+        ...(await listAdoptableComposeContainerIds(ref, { includeStopped: true })),
+      ]),
+    ];
+    for (const identifier of identifiers) {
+      try {
+        await execCommand(dockerBin, ["rm", "-f", identifier], {
+          envMode: "internal",
+          timeout: 30_000,
+        });
+      } catch (error) {
+        logger.warn({ err: error, identifier }, "Failed to remove dev container");
+      }
+    }
+  }
+
+  /**
+   * Probe containers are scratch: anything still labelled as one when the
+   * daemon starts belongs to a probe that never got to clean up (a crash, a
+   * kill -9), so it is garbage by definition.
+   */
+  async function removeAbandonedProbeContainers(): Promise<number> {
+    if (!(await isAvailable())) return 0;
+    const identifiers = await listContainerIds([`label=${CONTAINER_OWNER_LABEL}=probe`], {
+      includeStopped: true,
+    });
+    let removed = 0;
+    for (const identifier of identifiers) {
+      try {
+        await execCommand(dockerBin, ["rm", "-f", identifier], {
+          envMode: "internal",
+          timeout: 30_000,
+        });
+        removed += 1;
+        // A handle that outlives its container would report a running
+        // environment and send execs into nothing.
+        for (const [key, handle] of handles) {
+          if (handle.identifier !== identifier) continue;
+          handles.delete(key);
+          containerInfoByKey.delete(key);
+          containerConfigHashByKey.delete(key);
+        }
+      } catch (error) {
+        logger.warn({ err: error, identifier }, "Failed to remove abandoned probe container");
+      }
+    }
+    if (removed > 0) {
+      logger.info({ removed }, "Removed abandoned probe containers");
+    }
+    return removed;
+  }
+
+  async function restart(options: ContainerUpOptions): Promise<ExecutionHandle> {
+    await stop(options);
+    logger.info(
+      { key: options.key, workspaceFolder: options.workspaceFolder },
+      "Restarting dev container",
+    );
+    return runUp(options, false);
+  }
+
+  async function rebuild(options: ContainerUpOptions): Promise<ExecutionHandle> {
+    await stop(options);
+    logger.info(
+      { key: options.key, workspaceFolder: options.workspaceFolder },
+      "Rebuilding dev container",
+    );
+    return runUp(options, true);
+  }
+
+  /**
+   * `read-configuration` resolves the config the way `up` will and reports the
+   * folder and mount the container ends up with. Both naming this host folder
+   * mean the workspace's absolute worktree links resolve in the container as
+   * they are.
+   *
+   * Read from the source checkout, since the worktree being decided for does
+   * not exist yet. That answers for it too where the config says
+   * `${localWorkspaceFolder}` — the case this exists for, and the only way a
+   * compose project can mount two workspaces of one repository at their own
+   * paths. A config naming one absolute path answers no, which is also right:
+   * that path is the source checkout's, not the worktree's.
+   */
+  async function preservesHostWorkspacePath(workspaceFolder: string): Promise<boolean> {
+    const folder = resolve(workspaceFolder);
+    if (!discoverDevContainerConfig(folder)) return false;
+    try {
+      const result = await execCommand(
+        devcontainerBin,
+        ["read-configuration", "--workspace-folder", folder],
+        { timeout: READ_CONFIGURATION_TIMEOUT_MS },
+      );
+      const keepsHostPath = readConfigurationKeepsHostPath(result.stdout, folder);
+      logger.debug({ workspaceFolder: folder, keepsHostPath }, "Read container workspace folder");
+      return keepsHostPath;
+    } catch (error) {
+      // Only ever loses the optimisation: the caller falls back to relative
+      // links, which work whichever path the container mounts.
+      logger.debug(
+        { workspaceFolder: folder, error },
+        "Could not read the container workspace folder",
+      );
+      return false;
+    }
+  }
+
+  /**
+   * What "the config changed" means. devcontainer.json alone is not enough: the
+   * image is built from the Dockerfile or compose files it names, so editing those
+   * changes what a container would be while leaving this hash untouched. That gap
+   * cost a debugging session — a container built before `claude` existed in the
+   * image was reused indefinitely, and the only symptom was
+   * `Provider 'claude' is not available`.
+   *
+   * The references are pulled out with a narrow match rather than parsed:
+   * devcontainer.json is JSONC and nothing here parses that. A missed reference
+   * only costs sensitivity — the same blind spot as before, never a wrong answer —
+   * and a path that does not resolve to a file is skipped.
+   */
+  function getConfigHash(workspaceFolder: string): string | null {
+    const config = discoverDevContainerConfig(workspaceFolder);
+    if (!config) return null;
+    try {
+      const content = readFileSync(config.configPath, "utf-8");
+      const hash = createHash("sha256").update(content);
+      for (const reference of referencedBuildFiles(content, dirname(config.configPath))) {
+        try {
+          // The name as well as the bytes: renaming a Dockerfile changes the build
+          // even when both files exist.
+          hash.update(reference);
+          hash.update(readFileSync(reference));
+        } catch {
+          /* named but absent, or unreadable — nothing to fold in */
+        }
+      }
+      return hash.digest("hex");
+    } catch {
+      return null;
+    }
+  }
+
+  /** Absolute paths of the build inputs a devcontainer.json names, in a stable order. */
+  function referencedBuildFiles(configContent: string, configDir: string): string[] {
+    const found = new Set<string>();
+    const add = (value: string) => {
+      const trimmed = value.trim();
+      // A URL or a variable the CLI expands is not a path this can read.
+      if (!trimmed || trimmed.includes("://") || trimmed.includes("${")) return;
+      found.add(resolve(configDir, trimmed));
+    };
+    for (const [, single] of configContent.matchAll(
+      /"(?:dockerComposeFile|dockerfile|dockerFile)"\s*:\s*"([^"]+)"/g,
+    )) {
+      if (single) add(single);
+    }
+    // The array form, `"dockerComposeFile": ["base.yml", "override.yml"]`.
+    for (const [, list] of configContent.matchAll(/"dockerComposeFile"\s*:\s*\[([^\]]*)\]/g)) {
+      for (const [, entry] of (list ?? "").matchAll(/"([^"]+)"/g)) {
+        if (entry) add(entry);
+      }
+    }
+    return [...found].sort();
+  }
+
+  async function isAlreadyRunning(ref: ContainerRef): Promise<boolean> {
+    // If we already have an in-memory handle for this key, the container is
+    // running from this session.
+    if (handles.has(ref.key)) return true;
+    return (await findRunningContainerId(ref)) !== null;
+  }
+
+  function getContainerInfo(key: string): ContainerInfo | null {
+    return containerInfoByKey.get(key) ?? null;
+  }
+
+  /**
+   * The config hash the running container was built from, as stamped on it.
+   * `null` when it carries no stamp, which is itself worth knowing: the container
+   * came from somewhere else and nothing can say what it was built from.
+   */
+  function getContainerConfigHash(key: string): string | null {
+    return containerConfigHashByKey.get(key) ?? null;
+  }
+
+  /**
+   * Strategy factory: describes how to exec into the container with `docker
+   * exec`. A Podman backend would emit `podman exec`, a Kubernetes backend
+   * `kubectl exec ... --`; the strategy itself stays runtime-agnostic.
+   */
+  const createStrategy: LaunchStrategyFactory = (_key, workspaceFolder, handle) =>
+    new ContainerExecLaunchStrategy({
+      command: dockerBin,
+      leadingArgs: ["exec"],
+      // -i keeps stdin attached: agent processes are driven over stdin, and
+      // without it they see EOF immediately and exit before producing output.
+      optionArgs: ["-i", "-u", handle.remoteUser],
+      targetArgs: [handle.identifier],
+      workdirFlag: "-w",
+      envFlag: "-e",
+      ttyArgs: ["-t"],
+      hostWorkspaceFolder: workspaceFolder,
+      remoteWorkspaceFolder: handle.remoteWorkspaceFolder,
+      ...(handle.hostGatewayAddress ? { hostGatewayAddress: handle.hostGatewayAddress } : {}),
+    });
+
+  return {
+    id: DEVCONTAINER_BACKEND_ID,
+    label: DEVCONTAINER_BACKEND_LABEL,
+    isAvailable,
+    hasConfig,
+    up,
+    stop,
+    getHandle,
+    getContainerInfo,
+    getContainerConfigHash,
+    restart,
+    rebuild,
+    getConfigHash,
+    preservesHostWorkspacePath,
+    isAlreadyRunning,
+    removeAbandonedProbeContainers,
+    createStrategy,
+  };
+}
+
+const DEVCONTAINER_BACKEND_ID = "devcontainer";
+const DEVCONTAINER_BACKEND_LABEL = "Dev Container";
+
+/** What the UI shows about a running container, from the CLI result + inspect. */
+function buildContainerInfo(
+  handle: ExecutionHandle,
+  inspected: DockerInspectResult | null,
+): ContainerInfo {
+  return {
+    backend: DEVCONTAINER_BACKEND_ID,
+    backendLabel: DEVCONTAINER_BACKEND_LABEL,
+    containerId: handle.identifier.slice(0, 12),
+    containerName: inspected?.Name?.replace(/^\//, "") ?? handle.identifier.slice(0, 12),
+    image: inspected?.Config?.Image ?? "unknown",
+    startedAt: inspected?.State?.StartedAt ?? new Date().toISOString(),
+    remoteUser: inspected?.Config?.User || handle.remoteUser || "root",
+  };
+}
+
+interface DevContainerUpResult {
+  outcome: string;
+  containerId: string;
+  remoteUser: string;
+  remoteWorkspaceFolder: string;
+}
+
+function parseDevContainerUpResult(stdout: string): DevContainerUpResult | null {
+  const lines = stdout.trim().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (
+        parsed.outcome === "success" &&
+        typeof parsed.containerId === "string" &&
+        typeof parsed.remoteUser === "string" &&
+        typeof parsed.remoteWorkspaceFolder === "string"
+      ) {
+        return parsed;
+      }
+    } catch {
+      // Not JSON — keep scanning backwards
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the devcontainer CLI binary path. Tries the package-installed
+ * @devcontainers/cli first (via createRequire so it works regardless of
+ * the daemon's cwd or PATH), then falls back to "devcontainer" on PATH.
+ */
+function resolveDevContainerBinary(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    const cliPath = require.resolve("@devcontainers/cli/devcontainer.js");
+    return cliPath;
+  } catch {
+    return "devcontainer";
+  }
+}
