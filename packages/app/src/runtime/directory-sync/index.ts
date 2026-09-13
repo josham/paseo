@@ -189,7 +189,15 @@ export class DirectorySync {
     this.connection = connection;
     this.abortPendingSessionWaits();
     if (!connection.client || connection.status !== "online") return true;
-    if (this.hasDemand()) void this.requestDemandRefresh().catch(() => undefined);
+    if (this.hasDemand()) {
+      // The replica we are holding belongs to the connection that just went away, and
+      // a reconnect can land on a brand-new server-side session rather than a resumed
+      // one. Until the refresh below commits, "this workspace is not in the replica"
+      // means "we have not asked yet", not "it does not exist" -- so stop reporting the
+      // directory as hydrated, which is the flag routes read to tell those two apart.
+      this.markWorkspacesHydrated(false);
+      void this.requestDemandRefresh().catch(() => undefined);
+    }
     return true;
   }
 
