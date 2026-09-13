@@ -758,6 +758,7 @@ describe("WorkspaceReconciliationService", () => {
       mainRepoRoot: null,
       containerBackend: null,
       containerConfigHash: null,
+      containerScope: "project",
       createdAt: timestamp,
       updatedAt: expect.any(String),
       archivedAt: expect.any(String),
