@@ -88,6 +88,22 @@ export interface ContainerRef {
    * devcontainer.json and passed as `--workspace-folder` to the CLI.
    */
   workspaceFolder: string;
+  /**
+   * Force the Docker Compose project this container belongs to, for a config
+   * that uses compose. Compose derives the project from the workspace folder's
+   * name, which makes the container shared by every workspace on that checkout
+   * and collides outright between two checkouts named the same. Naming it
+   * explicitly is the only way to get a container of one's own — there is no CLI
+   * flag for it, so the backend passes `COMPOSE_PROJECT_NAME`.
+   *
+   * On the ref rather than on `up` alone because it is identity: adoption has to
+   * refuse a container belonging to a different project, and removal has to take
+   * the whole stack this project owns rather than one container out of it.
+   *
+   * Absent for the default `"project"` scope, where compose's own naming is what
+   * is wanted, and ignored by a config that does not use compose.
+   */
+  composeProject?: string;
 }
 
 export interface ContainerUpOptions extends ContainerRef {
@@ -102,18 +118,6 @@ export interface ContainerUpOptions extends ContainerRef {
    * agent's own git finds no repository at all.
    */
   isWorktree?: boolean;
-  /**
-   * Force the Docker Compose project this container belongs to, for a config
-   * that uses compose. Compose derives the project from the workspace folder's
-   * name, which makes the container shared by every workspace on that checkout
-   * and collides outright between two checkouts named the same. Naming it
-   * explicitly is the only way to get a container of one's own — there is no CLI
-   * flag for it, so the backend passes `COMPOSE_PROJECT_NAME`.
-   *
-   * Ignored by a config that does not use compose, which is already one
-   * container per key.
-   */
-  composeProject?: string;
 }
 
 export interface ContainerStopOptions {
