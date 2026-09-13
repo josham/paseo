@@ -5679,8 +5679,9 @@ export class DaemonClient {
    * opening starts its container without anyone asking, so the subscription is by
    * workspace and outlives any one call. Returns the unsubscribe.
    *
-   * Gate on `server_info.features.containerLifecycleProgress` before relying on
-   * it; an older daemon simply never sends any.
+   * No feature check is needed: an older daemon simply never sends any, so the
+   * subscription stays silent. `server_info.features.containerLifecycleProgress`
+   * is there for a caller that wants to say so in the UI.
    */
   onContainerLifecycleProgress(
     workspaceId: string,
