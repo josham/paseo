@@ -2392,6 +2392,67 @@ test("the config hash covers the files devcontainer.json names", () => {
 });
 
 dockerTest(
+  "reuses its container after a config change instead of building a second one",
+  async () => {
+    // The regression: the config hash used to go into `--id-label`, which the CLI
+    // matches on to *find* a container, not just to stamp one. A config edit then
+    // matched nothing, so `up` built a second container and left the first
+    // running — replacing the environment with no confirmation and orphaning
+    // whatever was in it, while `container.config_changed` never fired because the
+    // container the daemon ended up holding always matched the current config.
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-reuse-"));
+    const configPath = path.join(cwd, ".devcontainer.json");
+    writeFileSync(configPath, '{"image":"alpine:latest"}');
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    const ref = { key: "wks-reused", kind: "workspace" as const, workspaceFolder: cwd };
+
+    try {
+      const first = await backend.up(ref);
+      const builtFrom = backend.getContainerConfigHash(ref.key);
+
+      // Same image, different bytes: the hash moves, what the container should be
+      // does not.
+      writeFileSync(configPath, '{\n  // touched\n  "image":"alpine:latest"\n}');
+      expect(backend.getConfigHash(cwd)).not.toBe(builtFrom);
+
+      // A second backend, because `up` short-circuits on its own in-memory handle
+      // and would never reach the CLI. This is the real case anyway: the daemon
+      // restarts, finds the container by its labels, and adopts it.
+      const restarted = createDevContainerBackend({ logger: createTestLogger() });
+      const second = await restarted.up(ref);
+      expect(second.identifier).toBe(first.identifier);
+
+      // And exactly one container carries this workspace's identity, so nothing
+      // was orphaned behind the one in use.
+      const matching = execFileSync("docker", [
+        "ps",
+        "-a",
+        "--no-trunc",
+        "--filter",
+        `label=paseo.container=${ref.key}`,
+        "--filter",
+        `label=devcontainer.local_folder=${cwd}`,
+        "--format",
+        "{{.ID}}",
+      ])
+        .toString()
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      expect(matching).toHaveLength(1);
+
+      // The stamp still answers for what it was built from, which is what the
+      // staleness check compares against to offer a rebuild.
+      expect(restarted.getContainerConfigHash(ref.key)).toBe(builtFrom);
+    } finally {
+      await backend.stop(ref, { remove: true }).catch(() => {});
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  240_000,
+);
+
+dockerTest(
   "stamps the config hash on the container it builds",
   async () => {
     // The stamp is only useful if the CLI really carries `--id-label` through to

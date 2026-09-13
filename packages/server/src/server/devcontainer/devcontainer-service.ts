@@ -264,14 +264,32 @@ export function createDevContainerBackend(
     }
   }
 
-  function buildIdLabelArgs(ref: ContainerRef, configPath: string): string[] {
+  /**
+   * `--id-label` is not only a stamp: when it is supplied, the CLI *finds* the
+   * container to reuse by requiring every one of these labels to match. So the
+   * set has to be things that identify the workspace, never things that change
+   * with the config — a volatile label means a config edit finds nothing, and
+   * the CLI quietly builds a second container and leaves the first running.
+   *
+   * `stampConfigHash` is therefore set only when this call is going to create a
+   * container anyway (nothing to reuse, or a rebuild that removes what is
+   * there). Reusing is safe without it because docker label filters are subset
+   * matches: the four stable labels still find a container carrying a fifth,
+   * whatever hash it was stamped with — which is exactly what lets
+   * `container.config_changed` offer a rebuild instead of performing one.
+   */
+  function buildIdLabelArgs(
+    ref: ContainerRef,
+    configPath: string,
+    options: { stampConfigHash: boolean },
+  ): string[] {
     if (ref.kind !== "workspace" && ref.kind !== "probe") {
       // The owner label is how the reaper recognises a probe container. A bad
       // one is invisible to it, so the container would leak for good — fail at
       // creation rather than at cleanup time.
       throw new Error(`Container ref ${ref.key} has an invalid kind: ${String(ref.kind)}`);
     }
-    const configHash = getConfigHash(ref.workspaceFolder);
+    const configHash = options.stampConfigHash ? getConfigHash(ref.workspaceFolder) : null;
     return [
       "--id-label",
       `${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
@@ -359,11 +377,16 @@ export function createDevContainerBackend(
       removeExisting ? "Rebuilding dev container" : "Starting dev container",
     );
 
+    // A rebuild removes what is there, so it always creates. Otherwise the stamp
+    // goes on only when there is nothing to reuse — see buildIdLabelArgs.
+    const reusable = removeExisting ? null : await findRunningContainerId(options);
     const args = [
       "up",
       "--workspace-folder",
       workspaceFolder,
-      ...buildIdLabelArgs(options, config.configPath),
+      ...buildIdLabelArgs(options, config.configPath, {
+        stampConfigHash: reusable === null,
+      }),
       "--log-level",
       "info",
     ];
