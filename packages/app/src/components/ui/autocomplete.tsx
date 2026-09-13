@@ -13,6 +13,8 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { File, Folder } from "lucide-react-native";
 import type { Theme } from "@/styles/theme";
+import type { MatchRange } from "@getpaseo/protocol/search/text-match";
+import { HighlightedText } from "./highlighted-text";
 import { getAutocompleteScrollOffset } from "./autocomplete-utils";
 
 export interface AutocompleteOption {
@@ -21,6 +23,11 @@ export interface AutocompleteOption {
   detail?: string;
   description?: string;
   kind?: "command" | "file" | "directory";
+  /**
+   * Spans of `label` to mark, for lists ranked by a fuzzy match. Ignored when
+   * the label had glyphs stripped, because the offsets index the original.
+   */
+  labelRanges?: readonly MatchRange[];
 }
 
 interface AutocompleteProps {
@@ -105,7 +112,12 @@ function AutocompleteRow({
         </>
       ) : (
         <View style={styles.itemMainRow}>
-          <Text style={styles.itemLabel}>{optionLabel}</Text>
+          <HighlightedText
+            text={optionLabel}
+            ranges={optionLabel === option.label ? option.labelRanges : undefined}
+            style={styles.itemLabel}
+            numberOfLines={1}
+          />
           {optionDescription ? (
             <Text style={styles.itemDescriptionInline} numberOfLines={1}>
               {optionDescription}

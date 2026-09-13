@@ -99,10 +99,19 @@ export interface ComposerInputSnapshot {
   selection: { start: number; end: number };
 }
 
+export interface ComposerModifierKeys {
+  alt: boolean;
+  ctrl: boolean;
+  meta: boolean;
+  shift: boolean;
+}
+
 export interface ComposerKeyPressEvent {
   key: string;
   preventDefault: () => void;
   input: ComposerInputSnapshot;
+  /** Shift+Arrow extends a selection; prompt recall has to leave that alone. */
+  modifiers: ComposerModifierKeys;
 }
 
 export interface MessageInputProps {
@@ -137,6 +146,8 @@ export interface MessageInputProps {
   disabled?: boolean;
   /** Content to render on the left side of the composer toolbar (e.g., AgentControls) */
   leftContent?: React.ReactNode;
+  /** Content to render immediately after the attachment button (e.g., prompt history) */
+  afterAttachContent?: React.ReactNode;
   /** Content to render on the right side before the voice button (e.g., context window meter) */
   beforeVoiceContent?: React.ReactNode;
   /** Auxiliary content to render on the right side after the voice button. */
@@ -196,6 +207,7 @@ const MAX_INPUT_VIEWPORT_RATIO = 0.5;
 const MIN_INPUT_HEIGHT = isWeb ? MIN_INPUT_HEIGHT_DESKTOP : MIN_INPUT_HEIGHT_MOBILE;
 type WebTextInputKeyPressEvent = NativeSyntheticEvent<
   TextInputKeyPressEventData & {
+    altKey?: boolean;
     metaKey?: boolean;
     ctrlKey?: boolean;
     shiftKey?: boolean;
@@ -404,6 +416,12 @@ function handleDesktopKeyPressImpl(
       key: event.nativeEvent.key,
       preventDefault: () => event.preventDefault(),
       input: ctx.input,
+      modifiers: {
+        alt: event.nativeEvent.altKey === true,
+        ctrl: event.nativeEvent.ctrlKey === true,
+        meta: event.nativeEvent.metaKey === true,
+        shift: event.nativeEvent.shiftKey === true,
+      },
     });
     if (handled) return;
   }
@@ -1064,6 +1082,7 @@ interface ResolvedMessageInputProps {
   autoFocusKey: string | undefined;
   disabled: boolean;
   leftContent: React.ReactNode;
+  afterAttachContent: React.ReactNode;
   beforeVoiceContent: React.ReactNode;
   rightContent: React.ReactNode;
   activeActionContent: React.ReactNode;
@@ -1111,6 +1130,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     autoFocusKey: props.autoFocusKey,
     disabled: props.disabled ?? false,
     leftContent: props.leftContent,
+    afterAttachContent: props.afterAttachContent,
     beforeVoiceContent: props.beforeVoiceContent,
     rightContent: props.rightContent,
     activeActionContent: props.activeActionContent,
@@ -1166,6 +1186,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       autoFocusKey,
       disabled,
       leftContent,
+      afterAttachContent,
       beforeVoiceContent,
       rightContent,
       activeActionContent,
@@ -1839,6 +1860,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                 attachmentMenuItems={attachmentMenuItems}
                 addAttachmentLabel={t("composer.input.addAttachment")}
               />
+              {afterAttachContent}
               {leftContent}
             </View>
 

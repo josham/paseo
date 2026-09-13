@@ -107,6 +107,11 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { submitAgentInput } from "@/composer/submit";
+import { recordPromptHistory, usePromptHistory } from "@/composer/history/store";
+import { PromptHistoryButton } from "@/composer/history/button";
+import { usePromptHistorySearch } from "@/composer/history/use-prompt-history-search";
+import { usePromptRecall } from "@/composer/history/use-prompt-recall";
+import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { useAppSettings } from "@/hooks/use-settings";
@@ -1422,6 +1427,46 @@ function ComposerContentImpl({
     });
   }, []);
 
+  // Prompt recall is per project, so sibling worktrees of one repo share a list.
+  const promptHistoryProjectKey = useWorkspaceFields(
+    serverId,
+    workspaceId ?? null,
+    (workspace) => workspace.projectId,
+  );
+  const promptHistory = usePromptHistory({
+    serverId,
+    projectKey: promptHistoryProjectKey,
+  });
+  const promptHistorySearch = usePromptHistorySearch({
+    enabled: promptHistory.status !== "unsupported",
+    entries: promptHistory.entries,
+    status: promptHistory.status,
+    query: userInput,
+    replaceText: replaceUserInput,
+    focusInput,
+  });
+  const promptRecall = usePromptRecall({
+    enabled: !promptHistorySearch.isOpen,
+    entries: promptHistory.entries,
+    replaceText: replaceUserInput,
+  });
+
+  const { isActiveComposer: isActiveComposerPane } = useComposerKeyboardScope();
+  const promptHistoryHandlerIdRef = useRef(`${keyboardHandlerIdRef.current}:prompt-history`);
+  const handlePromptHistoryKeyboardAction = useCallback(
+    (action: KeyboardActionDefinition): boolean =>
+      action.id === "message-input.history-search" ? promptHistorySearch.open() : false,
+    [promptHistorySearch],
+  );
+  useKeyboardActionHandler({
+    handlerId: promptHistoryHandlerIdRef.current,
+    actions: ["message-input.history-search"],
+    enabled: isActiveComposerPane && promptHistory.status !== "unsupported",
+    priority: 200,
+    isActive: () => isActiveComposerPane,
+    handle: handlePromptHistoryKeyboardAction,
+  });
+
   const handleWorkspaceFileDropped = useCallback(
     (payload: WorkspaceFileDragPayload) => {
       if (!workspaceId) {
@@ -1600,11 +1645,25 @@ function ComposerContentImpl({
         result,
         outgoingAttachments,
       });
+      // The daemon records the same prompt when it arrives; this is the local
+      // echo so ArrowUp finds it without waiting for a round trip. A queued
+      // message counts, because the user is done typing it either way.
+      if (result === "submitted" || result === "queued") {
+        recordPromptHistory({
+          serverId,
+          projectKey: promptHistoryProjectKey,
+          text: outgoingMessage,
+        });
+      }
+      promptRecall.reset();
     },
     [
       allowEmptySubmit,
       beginSubmit,
       clearDraft,
+      promptHistoryProjectKey,
+      promptRecall,
+      serverId,
       completeSubmit,
       hasExternalContent,
       isAgentRunning,
@@ -1907,10 +1966,16 @@ function ComposerContentImpl({
 
   const hasSendableContent = userInput.trim().length > 0 || selectedAttachments.length > 0;
 
-  // Handle keyboard navigation for command autocomplete.
+  // Order matters: history search owns every key while its list is up, the
+  // slash/mention popup owns the arrows while it is up, and prompt recall only
+  // sees an ArrowUp nothing else wanted.
   const handleCommandKeyPress = useCallback(
-    (event: ComposerKeyPressEvent) => autocompleteOnKeyPressRef.current(event),
-    [],
+    (event: ComposerKeyPressEvent) => {
+      if (promptHistorySearch.onKeyPress(event)) return true;
+      if (autocompleteOnKeyPressRef.current(event)) return true;
+      return promptRecall.onKeyPress(event);
+    },
+    [promptHistorySearch, promptRecall],
   );
 
   const cancelButtonStyle = useMemo(
@@ -2140,6 +2205,29 @@ function ComposerContentImpl({
     ],
   );
 
+  /**
+   * Ctrl+R is unreachable without a physical keyboard, and React Native's native
+   * key events carry no modifier flags, so touch surfaces get a button instead.
+   * Compact web is included: a phone browser has neither.
+   */
+  const showPromptHistoryButton =
+    (isNative || isCompactLayout) && mode.showAttachments && promptHistory.status !== "unsupported";
+  const openPromptHistorySearch = promptHistorySearch.open;
+  const handlePromptHistoryPress = useCallback(() => {
+    openPromptHistorySearch();
+  }, [openPromptHistorySearch]);
+  const afterAttachContent = useMemo(
+    () =>
+      showPromptHistoryButton ? (
+        <PromptHistoryButton
+          onPress={handlePromptHistoryPress}
+          disabled={!isConnected || readOnly}
+          iconSize={buttonIconSize}
+        />
+      ) : null,
+    [buttonIconSize, handlePromptHistoryPress, isConnected, readOnly, showPromptHistoryButton],
+  );
+
   const leftContent = useMemo(
     () =>
       renderLeftContent({
@@ -2288,7 +2376,8 @@ function ComposerContentImpl({
   const githubEmptyText = githubSearchResultsQuery.isFetching
     ? t("composer.github.searching")
     : t("composer.github.noResults");
-  const autocompleteVisible = autocomplete.isVisible && mode.showAutocomplete;
+  const autocompleteVisible =
+    autocomplete.isVisible && mode.showAutocomplete && !promptHistorySearch.isOpen;
 
   return (
     <>
@@ -2314,6 +2403,15 @@ function ComposerContentImpl({
             {sendErrorNode}
 
             <View ref={messageInputContainerRef} style={styles.messageInputContainer}>
+              <ComposerAutocomplete
+                testID="composer-prompt-history-popover"
+                visible={promptHistorySearch.isOpen}
+                anchorRef={messageInputContainerRef}
+                options={promptHistorySearch.options}
+                selectedIndex={promptHistorySearch.selectedIndex}
+                onSelect={promptHistorySearch.onSelectOption}
+                emptyText={promptHistorySearch.emptyText}
+              />
               <ComposerAutocomplete
                 visible={autocompleteVisible}
                 anchorRef={messageInputContainerRef}
@@ -2353,6 +2451,7 @@ function ComposerContentImpl({
                   autoFocus={messageInputAutoFocus}
                   autoFocusKey={`${serverId}:${agentId}:${autoFocusKey ?? ""}`}
                   disabled={isSubmitLoading}
+                  afterAttachContent={afterAttachContent}
                   leftContent={leftContent}
                   beforeVoiceContent={beforeVoiceContent}
                   rightContent={rightContent}
