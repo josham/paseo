@@ -27,7 +27,16 @@ import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles"
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import * as Clipboard from "expo-clipboard";
-import { ChevronDown, Eye, EyeOff, FilePlus, FolderPlus, RotateCw } from "lucide-react-native";
+import {
+  ChevronDown,
+  Eye,
+  EyeOff,
+  FilePlus,
+  FolderPlus,
+  Link2,
+  Link2Off,
+  RotateCw,
+} from "lucide-react-native";
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import {
   TreeChevron,
@@ -54,9 +63,14 @@ import type {
   AgentFileExplorerState,
   ExplorerDirectory,
   ExplorerEntry,
+  ExplorerEntryUnavailableReason,
 } from "@/stores/session-store";
 import { useSessionStore } from "@/stores/session-store";
 import { FileActionsContextMenuContent } from "@/components/file-actions-menu";
+import {
+  explorerEntryCapabilities,
+  type ExplorerEntryCapabilities,
+} from "@/file-explorer/entry-availability";
 import { ContextMenu, ContextMenuTrigger, useContextMenu } from "@/components/ui/context-menu";
 import { useFileDownload } from "@/hooks/use-file-download";
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
@@ -84,6 +98,9 @@ const SORT_OPTIONS: { value: SortOption }[] = [
   { value: "modified" },
   { value: "size" },
 ];
+
+/** Sits beside the row label rather than in the icon column, so it reads as an annotation. */
+const WORKSPACE_TREE_SYMLINK_ICON_SIZE = 12;
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -128,6 +145,14 @@ interface TreeRowItemProps {
   onDeleteEntry?: (entry: ExplorerEntry) => void;
   testID?: string;
 }
+
+type TreeRowActionsMenuProps = Omit<
+  TreeRowItemProps,
+  "serverId" | "workspaceId" | "depth" | "isSelected" | "loading" | "onEntryPress" | "onSelectEntry"
+> & {
+  isDirectory: boolean;
+  capabilities: ExplorerEntryCapabilities;
+};
 
 function sortTriggerStyle({
   hovered,
@@ -228,6 +253,37 @@ function EntryNameInputRow({
   );
 }
 
+/**
+ * The link glyph on a symlink row, plus the reason when the workspace boundary
+ * will not follow it. Blocked links used to be dropped from the listing, which
+ * read as the file having disappeared; showing why is the whole point.
+ */
+function SymlinkAdornment({ unavailable }: { unavailable?: ExplorerEntryUnavailableReason }) {
+  const { t } = useTranslation();
+  const { theme } = useUnistyles();
+
+  if (!unavailable) {
+    return (
+      <Link2
+        size={WORKSPACE_TREE_SYMLINK_ICON_SIZE}
+        color={theme.colors.foregroundMuted}
+        accessibilityLabel={t("workspace.fileExplorer.symlink.label")}
+      />
+    );
+  }
+
+  return (
+    <View style={styles.symlinkBlocked}>
+      <Link2Off size={WORKSPACE_TREE_SYMLINK_ICON_SIZE} color={theme.colors.foregroundExtraMuted} />
+      <Text style={styles.symlinkBlockedText} numberOfLines={1}>
+        {unavailable === "outside-workspace"
+          ? t("workspace.fileExplorer.symlink.outsideWorkspace")
+          : t("workspace.fileExplorer.symlink.broken")}
+      </Text>
+    </View>
+  );
+}
+
 function TreeRowItem({
   serverId,
   workspaceId,
@@ -258,8 +314,10 @@ function TreeRowItem({
   const showNameHover = useCallback(() => setIsHovered(true), []);
   const hideNameHover = useCallback(() => setIsHovered(false), []);
   const isDirectory = entry.kind === "directory";
+  const unavailable = entry.unavailable;
+  const capabilities = explorerEntryCapabilities(entry);
   const dragSourceRef = useWorkspaceFileDragSource({
-    enabled: !isDirectory,
+    enabled: !isDirectory && capabilities.canAccessTarget,
     serverId,
     workspaceId,
     path: entry.path,
@@ -270,8 +328,12 @@ function TreeRowItem({
     if (selection && !selection.isCollapsed && selection.toString().length > 0) {
       return;
     }
+    if (!capabilities.canOpen) {
+      onSelectEntry(entry);
+      return;
+    }
     onEntryPress(entry);
-  }, [onEntryPress, entry]);
+  }, [capabilities.canOpen, entry, onEntryPress, onSelectEntry]);
 
   const handleSelect = useCallback(() => {
     onSelectEntry(entry);
@@ -287,6 +349,95 @@ function TreeRowItem({
     [depth, isSelected],
   );
 
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger
+        onPress={handlePress}
+        onLongPress={handleSelect}
+        onContextMenu={handleSelect}
+        style={pressableStyle}
+        onHoverIn={showNameHover}
+        onHoverOut={hideNameHover}
+        accessibilityState={accessibilityState}
+        aria-selected={isSelected}
+        testID={testID}
+      >
+        <View ref={dragSourceRef} style={styles.entryInfo}>
+          <View style={styles.entryIcon}>
+            {isDirectory ? (
+              <DirectoryChevronIcon loading={loading} expanded={isExpanded} />
+            ) : (
+              <MaterialFileIcon fileName={entry.name} size={WORKSPACE_TREE_ICON_SIZE} />
+            )}
+          </View>
+          <Text
+            style={[
+              styles.entryName,
+              workspaceTreeRowStyles.name,
+              isHovered && capabilities.canOpen && workspaceTreeRowStyles.nameHovered,
+              unavailable && styles.entryNameUnavailable,
+            ]}
+            numberOfLines={1}
+            testID={testID ? `${testID}-name` : undefined}
+          >
+            {entry.name}
+          </Text>
+          {entry.isSymlink ? <SymlinkAdornment unavailable={unavailable} /> : null}
+        </View>
+      </ContextMenuTrigger>
+      <TreeRowActionsMenu
+        entry={entry}
+        isDirectory={isDirectory}
+        isExpanded={isExpanded}
+        capabilities={capabilities}
+        onCopyPath={onCopyPath}
+        onCopyRelativePath={onCopyRelativePath}
+        onOpenInEditor={onOpenInEditor}
+        editorTargetName={editorTargetName}
+        onRevealEntry={onRevealEntry}
+        revealTargetName={revealTargetName}
+        onDownloadEntry={onDownloadEntry}
+        onAddToChat={onAddToChat}
+        onOpenFileToSide={onOpenFileToSide}
+        onNewEntry={onNewEntry}
+        onCollapseDirectory={onCollapseDirectory}
+        onRenameEntry={onRenameEntry}
+        onDuplicateEntry={onDuplicateEntry}
+        onDeleteEntry={onDeleteEntry}
+        testID={testID}
+      />
+    </ContextMenu>
+  );
+}
+
+/**
+ * Availability gating for one row's context menu, and the row's action bindings.
+ * An unavailable entry is a symlink the workspace boundary will not follow, so
+ * every action that reads or copies the target is withheld rather than offered
+ * and failed. Renaming or deleting the link itself still works when it is merely
+ * broken, because those touch the link and never the target.
+ */
+function TreeRowActionsMenu({
+  entry,
+  isDirectory,
+  isExpanded,
+  capabilities,
+  onCopyPath,
+  onCopyRelativePath,
+  onOpenInEditor,
+  editorTargetName,
+  onRevealEntry,
+  revealTargetName,
+  onDownloadEntry,
+  onAddToChat,
+  onOpenFileToSide,
+  onNewEntry,
+  onCollapseDirectory,
+  onRenameEntry,
+  onDuplicateEntry,
+  onDeleteEntry,
+  testID,
+}: TreeRowActionsMenuProps) {
   const handleCopy = useCallback(() => {
     onCopyPath(entry.path);
   }, [onCopyPath, entry.path]);
@@ -339,60 +490,28 @@ function TreeRowItem({
     onDeleteEntry?.(entry);
   }, [onDeleteEntry, entry]);
 
+  const { canAccessTarget, canEditInPlace } = capabilities;
   return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        onPress={handlePress}
-        onLongPress={handleSelect}
-        onContextMenu={handleSelect}
-        style={pressableStyle}
-        onHoverIn={showNameHover}
-        onHoverOut={hideNameHover}
-        accessibilityState={accessibilityState}
-        aria-selected={isSelected}
-        testID={testID}
-      >
-        <View ref={dragSourceRef} style={styles.entryInfo}>
-          <View style={styles.entryIcon}>
-            {isDirectory ? (
-              <DirectoryChevronIcon loading={loading} expanded={isExpanded} />
-            ) : (
-              <MaterialFileIcon fileName={entry.name} size={WORKSPACE_TREE_ICON_SIZE} />
-            )}
-          </View>
-          <Text
-            style={[
-              styles.entryName,
-              workspaceTreeRowStyles.name,
-              isHovered && workspaceTreeRowStyles.nameHovered,
-            ]}
-            numberOfLines={1}
-            testID={testID ? `${testID}-name` : undefined}
-          >
-            {entry.name}
-          </Text>
-        </View>
-      </ContextMenuTrigger>
-      <FileActionsContextMenuContent
-        fileKind={entry.kind}
-        onOpenInEditor={isDirectory && onOpenInEditor ? handleOpenInEditor : undefined}
-        editorTargetName={editorTargetName}
-        onCopyPath={handleCopy}
-        onCopyRelativePath={handleCopyRelativePath}
-        onReveal={onRevealEntry ? handleReveal : undefined}
-        revealTargetName={revealTargetName}
-        onDownload={handleDownload}
-        onAddToChat={onAddToChat ? handleAddToChat : undefined}
-        onOpenToSide={!isDirectory && onOpenFileToSide ? handleOpenToSide : undefined}
-        onNewFile={onNewEntry ? handleNewFile : undefined}
-        onNewFolder={onNewEntry ? handleNewFolder : undefined}
-        onCollapseFolder={isDirectory && isExpanded ? handleCollapseDirectory : undefined}
-        onRename={onRenameEntry ? handleRename : undefined}
-        onDuplicate={onDuplicateEntry ? handleDuplicate : undefined}
-        onDelete={onDeleteEntry ? handleDelete : undefined}
-        testIDPrefix={testID}
-      />
-    </ContextMenu>
+    <FileActionsContextMenuContent
+      fileKind={entry.kind}
+      fileExists={canAccessTarget}
+      onOpenInEditor={isDirectory && onOpenInEditor ? handleOpenInEditor : undefined}
+      editorTargetName={editorTargetName}
+      onCopyPath={handleCopy}
+      onCopyRelativePath={handleCopyRelativePath}
+      onReveal={onRevealEntry && canAccessTarget ? handleReveal : undefined}
+      revealTargetName={revealTargetName}
+      onDownload={handleDownload}
+      onAddToChat={onAddToChat ? handleAddToChat : undefined}
+      onOpenToSide={!isDirectory && onOpenFileToSide ? handleOpenToSide : undefined}
+      onNewFile={onNewEntry && canAccessTarget ? handleNewFile : undefined}
+      onNewFolder={onNewEntry && canAccessTarget ? handleNewFolder : undefined}
+      onCollapseFolder={isDirectory && isExpanded ? handleCollapseDirectory : undefined}
+      onRename={onRenameEntry && canEditInPlace ? handleRename : undefined}
+      onDuplicate={onDuplicateEntry && canAccessTarget ? handleDuplicate : undefined}
+      onDelete={onDeleteEntry && canEditInPlace ? handleDelete : undefined}
+      testIDPrefix={testID}
+    />
   );
 }
 
@@ -1776,6 +1895,21 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
+    userSelect: "none",
+  },
+  entryNameUnavailable: {
+    color: theme.colors.foregroundExtraMuted,
+    textDecorationLine: "line-through",
+  },
+  symlinkBlocked: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 0,
+  },
+  symlinkBlockedText: {
+    color: theme.colors.foregroundExtraMuted,
+    fontSize: theme.fontSize.sm,
     userSelect: "none",
   },
   draftInput: {

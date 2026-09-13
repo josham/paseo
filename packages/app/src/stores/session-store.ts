@@ -230,6 +230,7 @@ function preserveMapIdentity<Key, Value>(
 }
 
 export type ExplorerEntryKind = "file" | "directory";
+export type ExplorerEntryUnavailableReason = "outside-workspace" | "broken-link";
 export type ExplorerFileKind = "text" | "image" | "binary";
 export type ExplorerEncoding = "utf-8" | "base64" | "none";
 
@@ -239,6 +240,8 @@ export interface ExplorerEntry {
   kind: ExplorerEntryKind;
   size: number;
   modifiedAt: string;
+  isSymlink?: boolean;
+  unavailable?: ExplorerEntryUnavailableReason;
 }
 
 export interface ExplorerFile {

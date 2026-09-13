@@ -85,3 +85,32 @@ desktop preference.
 Panels request an implicit open through the narrow `openPreferredTarget(target, source)` pane
 contract. Entry points outside panels use `openPreferredWorkspaceTarget`. Do not branch on a
 specific shell inside a panel.
+
+## Symlinks and the workspace boundary
+
+Every file-explorer operation resolves its path through `resolveScopedPath` in
+`packages/server/src/server/file-explorer/service.ts`, which canonicalises the request with
+`realpath` and rejects anything landing outside the workspace root. That check is the only thing
+confining the explorer — and, through the shared read, write, rename, delete, and download-token
+paths, confining writes as well — to the workspace, so it applies to symlink targets too.
+
+Listings classify an entry by the followed target, not by the `readdir` dirent. A dirent reports a
+symlink as neither file nor directory, so classifying from it labelled every symlinked directory a
+file and left it unopenable. Entries carry `isSymlink` when the name is a link.
+
+A link the boundary will not follow is listed with an `unavailable` reason rather than dropped:
+
+| Reason              | Cause                                         | Client behaviour                                          |
+| ------------------- | --------------------------------------------- | --------------------------------------------------------- |
+| `outside-workspace` | target canonicalises outside the root         | no actions; the row cannot be opened, renamed, or deleted |
+| `broken-link`       | target is missing, or the link cycles (ELOOP) | the link itself can still be renamed or deleted           |
+
+Unavailable entries report `kind: "file"` even when the target is a directory, so no client is
+invited to expand one, and `size: 0` — a symlink's own size is its target path's length, which
+would leak the shape of a target the client may not see. Only `lstat` on the link is consulted.
+
+An ordinary entry that fails to stat lost a race with its own deletion and stays out of the
+listing; only symlinks become placeholders.
+
+`packages/app/src/file-explorer/entry-availability.ts` maps those reasons to what the UI offers.
+Gate row actions through it rather than testing `unavailable` inline.
