@@ -170,6 +170,9 @@ export interface ProviderSnapshotManagerSpies {
   applyMutableProviderConfig: ReturnType<
     typeof vi.fn<ProviderSnapshotManager["applyMutableProviderConfig"]>
   >;
+  isUnattendedModeForAgent: ReturnType<
+    typeof vi.fn<ProviderSnapshotManager["isUnattendedModeForAgent"]>
+  >;
   destroy: ReturnType<typeof vi.fn<ProviderSnapshotManager["destroy"]>>;
 }
 
@@ -230,6 +233,9 @@ export function createProviderSnapshotManagerStub(): {
       clients: {},
     }),
   );
+  const isUnattendedModeForAgent = vi.fn<ProviderSnapshotManager["isUnattendedModeForAgent"]>(
+    () => false,
+  );
   const on = vi.fn();
   const off = vi.fn();
   const destroy = vi.fn<ProviderSnapshotManager["destroy"]>();
@@ -251,6 +257,7 @@ export function createProviderSnapshotManagerStub(): {
     resolveDefaultModel,
     getProviderDiagnostic,
     applyMutableProviderConfig,
+    isUnattendedModeForAgent,
     on,
     off,
     destroy,
@@ -277,6 +284,7 @@ export function createProviderSnapshotManagerStub(): {
     resolveDefaultModel,
     getProviderDiagnostic,
     applyMutableProviderConfig,
+    isUnattendedModeForAgent,
     destroy,
   };
 }

@@ -8,6 +8,7 @@ import type { Logger } from "pino";
 import pLimit, { type LimitFunction } from "p-limit";
 
 import { expandTilde } from "../../utils/path.js";
+import { isUnattendedMode } from "./create-agent-mode.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import {
   filterSelectableAgentModels,
@@ -538,13 +539,30 @@ export class ProviderSnapshotManager {
     });
     const definition = this.requireProvider(input.provider);
     const parent = input.parent ? this.resolveParent(input.parent) : null;
+    const availableModes = entry.modes ?? [];
+    // An agent whose own actions a human adjudicates may not create a child that
+    // runs unprompted. Inheriting unattendedness from an unattended caller stays
+    // allowed — that is how orchestration hands work to workers — but naming such
+    // a mode outright is an escalation when the caller does not already run that
+    // way. Only creation through a calling agent carries a parent; operator-
+    // initiated creation has none and is unaffected.
+    if (
+      input.requestedMode !== undefined &&
+      parent &&
+      !parent.isUnattended &&
+      availableModes.some((mode) => mode.id === input.requestedMode && isUnattendedMode(mode))
+    ) {
+      throw new Error(
+        `Mode '${input.requestedMode}' runs without permission prompts and cannot be requested by an agent that does not already run that way.`,
+      );
+    }
     return definition.resolveCreateConfig({
       provider: input.provider,
       requestedMode: input.requestedMode,
       featureValues: input.featureValues,
       parent,
       unattended: input.unattended || parent?.isUnattended === true,
-      availableModes: entry.modes ?? [],
+      availableModes,
     });
   }
 
@@ -721,17 +739,27 @@ export class ProviderSnapshotManager {
   }
 
   private resolveParent(parent: ManagedAgent): AgentCreateConfigParent {
-    const definition = this.requireProvider(parent.provider);
     return {
       provider: parent.provider,
       modeId: parent.currentModeId,
-      isUnattended: definition.isCreateConfigUnattended({
-        modeId: parent.currentModeId,
-        config: parent.config,
-        features: parent.features,
-        availableModes: parent.availableModes ?? definition.modes ?? [],
-      }),
+      isUnattended: this.isUnattendedModeForAgent(parent, parent.currentModeId),
     };
+  }
+
+  /**
+   * Whether `modeId` would run this agent without permission prompts. The
+   * answer is the provider's to give: a mode is the usual signal, but some
+   * providers also derive it from feature values, so the agent's own config
+   * and features are part of the question.
+   */
+  isUnattendedModeForAgent(agent: ManagedAgent, modeId: string | null): boolean {
+    const definition = this.requireProvider(agent.provider);
+    return definition.isCreateConfigUnattended({
+      modeId,
+      config: agent.config,
+      features: agent.features,
+      availableModes: agent.availableModes ?? definition.modes ?? [],
+    });
   }
 
   private getSnapshotForTarget(

@@ -107,6 +107,6 @@ export function isDefaultAgentCreateConfigUnattended(
   return input.availableModes.some((mode) => mode.id === input.modeId && isUnattendedMode(mode));
 }
 
-function isUnattendedMode(mode: AgentMode): boolean {
+export function isUnattendedMode(mode: AgentMode): boolean {
   return mode.isUnattended === true;
 }
