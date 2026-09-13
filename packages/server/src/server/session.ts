@@ -3902,7 +3902,15 @@ export class Session {
         this.terminalController.killTerminalsForWorkspace(workspaceId);
         await backend
           ?.stop(
-            { key: workspaceId, kind: "workspace", workspaceFolder: previous.cwd },
+            {
+              key: workspaceId,
+              kind: "workspace",
+              workspaceFolder: previous.cwd,
+              // `previous`, deliberately: what is being torn down belongs to the
+              // scope being left, and for a workspace-scoped one that is a whole
+              // stack keyed on a name nothing will ever ask for again.
+              ...this.composeProjectFor(previous),
+            },
             // Left running, it is a container nothing will ask for again.
             { remove: true },
           )
@@ -3958,7 +3966,12 @@ export class Session {
         const previousBackend = this.containerBackends?.get(previous.containerBackend);
         this.launchStrategyRegistry?.deactivateContainer(workspaceId);
         await previousBackend
-          ?.stop({ key: workspaceId, kind: "workspace", workspaceFolder: previous.cwd })
+          ?.stop({
+            key: workspaceId,
+            kind: "workspace",
+            workspaceFolder: previous.cwd,
+            ...this.composeProjectFor(previous),
+          })
           .catch((error: unknown) => {
             this.sessionLogger.warn(
               { err: error, workspaceId },
@@ -6780,7 +6793,12 @@ export class Session {
     if (!workspace || !backend) return;
     this.launchStrategyRegistry?.deactivateContainer(workspaceId);
     try {
-      await backend.stop({ key: workspaceId, kind: "workspace", workspaceFolder: workspace.cwd });
+      await backend.stop({
+        key: workspaceId,
+        kind: "workspace",
+        workspaceFolder: workspace.cwd,
+        ...this.composeProjectFor(workspace),
+      });
     } catch (error) {
       this.sessionLogger.warn(
         { err: error, workspaceId },
