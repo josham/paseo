@@ -188,6 +188,11 @@ export function createDevContainerBackend(
    * compose container anyway, where two image-based configs would get their own.
    * Hence both guards — the candidate has to be compose's, and unclaimed or
    * already ours, never a container another key stamped.
+   *
+   * And when this ref names its own project, the folder stops being the right
+   * question entirely: a workspace-scoped stack shares the folder with the
+   * checkout's shared one, so without the project filter it would adopt — and on
+   * removal delete — a container it never used, including one VS Code built.
    */
   async function findAdoptableComposeContainerId(
     ref: ContainerRef,
@@ -211,7 +216,10 @@ export function createDevContainerBackend(
           "--filter",
           `label=${LOCAL_FOLDER_LABEL}=${resolve(ref.workspaceFolder)}`,
           "--filter",
-          `label=${COMPOSE_PROJECT_LABEL}`,
+          // Bare when compose names the project, exact when we do.
+          ref.composeProject
+            ? `label=${COMPOSE_PROJECT_LABEL}=${ref.composeProject}`
+            : `label=${COMPOSE_PROJECT_LABEL}`,
           "--format",
           `{{.ID}} {{.Label "${CONTAINER_KEY_LABEL}"}}`,
         ],
@@ -443,11 +451,17 @@ export function createDevContainerBackend(
    */
   function runDevContainerCli(
     args: string[],
-    options: Pick<ContainerUpOptions, "onProgress" | "signal">,
+    options: Pick<ContainerUpOptions, "onProgress" | "signal" | "composeProject">,
   ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolveRun, rejectRun) => {
       const child = spawn(devcontainerBin, args, {
-        env: { ...process.env },
+        // COMPOSE_PROJECT_NAME is how a compose project gets a name of our
+        // choosing: the CLI has no flag for it, and it honours the variable over
+        // the name it would derive from the folder. Verified against the CLI.
+        env: {
+          ...process.env,
+          ...(options.composeProject ? { COMPOSE_PROJECT_NAME: options.composeProject } : {}),
+        },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         ...(options.signal ? { signal: options.signal } : {}),
@@ -522,6 +536,17 @@ export function createDevContainerBackend(
     if (options?.remove) await removeContainer(ref);
   }
 
+  /**
+   * Every container in a compose project this daemon named, sibling services
+   * included. Empty for a ref that leaves the project name to compose.
+   */
+  async function listProjectContainerIds(ref: ContainerRef): Promise<string[]> {
+    if (!ref.composeProject) return [];
+    return listContainerIds([`label=${COMPOSE_PROJECT_LABEL}=${ref.composeProject}`], {
+      includeStopped: true,
+    });
+  }
+
   /** Delete the container for a key, running or not. */
   async function removeContainer(ref: ContainerRef): Promise<void> {
     const identifiers = [
@@ -536,6 +561,13 @@ export function createDevContainerBackend(
         // The compose container this workspace has been using may be one it
         // never labelled; leaving it behind is what a rebuild is meant to undo.
         ...(await listAdoptableComposeContainerIds(ref, { includeStopped: true })),
+        // A project of our own is a whole stack nothing else will ever ask for:
+        // the name is derived from this workspace's key, so once the workspace
+        // stops wanting it, its sibling services (a database, a cache) are
+        // unreachable and unreclaimable. Compose's own project is left alone —
+        // there the siblings are shared with every other workspace on the
+        // checkout and are exactly what should survive.
+        ...(await listProjectContainerIds(ref)),
       ]),
     ];
     for (const identifier of identifiers) {

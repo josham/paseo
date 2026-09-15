@@ -978,6 +978,8 @@ interface WorkspaceHeaderTitleBarProps {
   onOpenSetupTab: () => void;
   onRestartContainer: () => void;
   onRebuildContainer: () => void;
+  containerScope?: "project" | "workspace";
+  onToggleContainerScope: () => void;
   onScriptTerminalStarted: (terminalId: string) => void;
   onViewScriptTerminal: (terminalId: string) => void;
   onOpenUrlInBrowserTab: (url: string) => void;
@@ -1012,6 +1014,8 @@ function WorkspaceHeaderTitleBar({
   onOpenSetupTab,
   onRestartContainer,
   onRebuildContainer,
+  containerScope,
+  onToggleContainerScope,
   onScriptTerminalStarted,
   onViewScriptTerminal,
   onOpenUrlInBrowserTab,
@@ -1084,6 +1088,8 @@ function WorkspaceHeaderTitleBar({
             hasDevContainerConfig={hasDevContainerConfig}
             onRestartContainer={onRestartContainer}
             onRebuildContainer={onRebuildContainer}
+            containerScope={containerScope}
+            onToggleContainerScope={onToggleContainerScope}
           />
         ) : (
           <WorkspaceHeaderMenuDesktop
@@ -1099,6 +1105,8 @@ function WorkspaceHeaderTitleBar({
             hasDevContainerConfig={hasDevContainerConfig}
             onRestartContainer={onRestartContainer}
             onRebuildContainer={onRebuildContainer}
+            containerScope={containerScope}
+            onToggleContainerScope={onToggleContainerScope}
           />
         )}
         {isMobile && workspaceScripts.length > 0 ? (
@@ -2900,6 +2908,29 @@ function WorkspaceScreenContent({
     }
   }, [client, normalizedWorkspaceId, toast, t]);
 
+  const handleToggleContainerScope = useCallback(async () => {
+    if (!client || !normalizedWorkspaceId) return;
+    const next = workspaceDescriptor?.containerScope === "workspace" ? "project" : "workspace";
+    const confirmed = await confirmDialog({
+      title: t("workspace.header.container.scopeConfirmTitle"),
+      message:
+        next === "workspace"
+          ? t("workspace.header.container.scopeIsolateConfirmMessage")
+          : t("workspace.header.container.scopeShareConfirmMessage"),
+      confirmLabel:
+        next === "workspace"
+          ? t("workspace.header.container.isolateAction")
+          : t("workspace.header.container.shareAction"),
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await client.setWorkspaceContainerScope(normalizedWorkspaceId, next);
+    } catch {
+      toast.error(t("workspace.header.container.configChangedMessage"));
+    }
+  }, [client, normalizedWorkspaceId, workspaceDescriptor?.containerScope, toast, t]);
+
   const handleBulkCloseTabs = useCallback(
     async (input: {
       tabsToClose: WorkspaceTabDescriptor[];
@@ -3994,6 +4025,8 @@ function WorkspaceScreenContent({
                 onOpenSetupTab={handleOpenSetupTab}
                 onRestartContainer={handleRestartContainer}
                 onRebuildContainer={handleRebuildContainer}
+                containerScope={workspaceDescriptor?.containerScope}
+                onToggleContainerScope={handleToggleContainerScope}
                 onScriptTerminalStarted={handleScriptTerminalStarted}
                 onViewScriptTerminal={handleViewScriptTerminal}
                 onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
@@ -4009,6 +4042,7 @@ function WorkspaceScreenContent({
       currentBranchName,
       handleRestartContainer,
       handleRebuildContainer,
+      handleToggleContainerScope,
       handleCopyBranchName,
       handleCopyWorkspacePath,
       handleCreateBrowserTab,
