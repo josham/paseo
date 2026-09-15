@@ -15,6 +15,10 @@ import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
 import { filePreviewRenderKind } from "@/components/file-pane-render-mode";
+import { PdfPreview } from "@/components/pdf-preview";
+import { hasPdfExtension, isPdfFile } from "@/pdf/pdf-mime";
+import type { PdfPreviewDocument } from "@/pdf/pdf-preview-props";
+import { usePdfDownload } from "@/pdf/use-pdf-download";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
@@ -54,6 +58,8 @@ interface FilePreviewBodyProps {
   location: WorkspaceFileLocation;
   navigationRevision: number;
   imagePreviewUri: string | null;
+  pdfDocument: PdfPreviewDocument | null;
+  onDownloadPdf?: () => void;
 }
 
 type TextExplorerFile = ExplorerFile & { kind: "text" };
@@ -135,6 +141,8 @@ function FilePreviewBody({
   location,
   navigationRevision,
   imagePreviewUri,
+  pdfDocument,
+  onDownloadPdf,
 }: FilePreviewBodyProps) {
   const { t } = useTranslation();
   const filePath = location.path;
@@ -211,9 +219,30 @@ function FilePreviewBody({
     return <ZoomableImage uri={imagePreviewUri} testID="image-file-preview" />;
   }
 
+  if (isPdfFile(preview)) {
+    if (!pdfDocument) {
+      return (
+        <View style={styles.centerState}>
+          <ThemedLoadingSpinner size="small" uniProps={foregroundMutedColorMapping} />
+          <Text style={styles.loadingText}>{t("panels.file.loading")}</Text>
+        </View>
+      );
+    }
+
+    return (
+      <PdfPreview {...pdfDocument} onDownload={onDownloadPdf} testID="workspace-file-pdf-preview" />
+    );
+  }
+
   return (
     <View style={styles.centerState}>
-      <Text style={styles.emptyText}>{t("panels.file.binaryPreviewUnavailable")}</Text>
+      <Text style={styles.emptyText}>
+        {/* A .pdf that did not arrive as application/pdf came from a daemon
+            older than PDF preview support — the mime is the capability. */}
+        {hasPdfExtension(filePath)
+          ? t("panels.file.pdf.hostUpdateRequired")
+          : t("panels.file.binaryPreviewUnavailable")}
+      </Text>
       <Text style={styles.binaryMetaText}>{formatFileSize({ size: preview.size })}</Text>
     </View>
   );
@@ -278,8 +307,18 @@ export function FilePane({
 
   useEffect(() => setPreviewMode("preview"), [targetKey]);
 
-  const { file: preview, imageAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
+  const {
+    file: preview,
+    imageAttachment,
+    pdfDocument,
+  } = resolveFilePreviewLifecycle(previewLifecycle);
   const imagePreviewUri = useAttachmentPreviewUrl(imageAttachment);
+  const onDownloadPdf = usePdfDownload({
+    serverId,
+    workspaceRoot: normalizedWorkspaceRoot,
+    readTarget,
+    pdfDocument,
+  });
   const isRenderable = isRenderablePreview(preview, location.path);
   const editable = isEditableTextFile({
     preview,
@@ -316,6 +355,8 @@ export function FilePane({
       location={location}
       navigationRevision={navigationRevision}
       imagePreviewUri={imagePreviewUri}
+      pdfDocument={pdfDocument}
+      onDownloadPdf={onDownloadPdf}
     />
   );
 }
@@ -357,6 +398,8 @@ function FilePanePresentation({
   location,
   navigationRevision,
   imagePreviewUri,
+  pdfDocument,
+  onDownloadPdf,
 }: {
   serverId: string;
   client: DaemonClient | null;
@@ -378,6 +421,8 @@ function FilePanePresentation({
   location: WorkspaceFileLocation;
   navigationRevision: number;
   imagePreviewUri: string | null;
+  pdfDocument: PdfPreviewDocument | null;
+  onDownloadPdf?: () => void;
 }) {
   if (!client && readTarget) {
     return (
@@ -449,6 +494,8 @@ function FilePanePresentation({
         location={location}
         navigationRevision={navigationRevision}
         imagePreviewUri={imagePreviewUri}
+        pdfDocument={pdfDocument}
+        onDownloadPdf={onDownloadPdf}
       />
     </View>
   );
@@ -622,6 +669,7 @@ function EditableFilePane({
           location={location}
           navigationRevision={navigationRevision}
           imagePreviewUri={null}
+          pdfDocument={null}
         />
       )}
     </View>
