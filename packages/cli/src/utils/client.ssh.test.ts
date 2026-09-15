@@ -51,11 +51,14 @@ describe("CLI SSH transport", () => {
       target: { kind: "endpoint", host: "ssh://deploy@build-box:2222?daemonPort=7777" },
     });
 
-    expect(mocks.createSshTunnel).toHaveBeenCalledWith({
-      host: "deploy@build-box",
-      sshPort: 2222,
-      daemonPort: 7777,
-    });
+    expect(mocks.createSshTunnel).toHaveBeenCalledWith(
+      {
+        host: "deploy@build-box",
+        sshPort: 2222,
+        daemonPort: 7777,
+      },
+      undefined,
+    );
     expect(mocks.configs[0]).toMatchObject({
       url: "ws://127.0.0.1:4567/ws",
       clientId: "cli-test-id",

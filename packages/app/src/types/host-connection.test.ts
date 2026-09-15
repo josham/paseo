@@ -164,9 +164,52 @@ describe("normalizeStoredHostProfile", () => {
       daemonPort: 7777,
     });
   });
+
+  it("keeps a stored remote setup opt-in across restarts", () => {
+    const profile = normalizeStoredHostProfile({
+      serverId: "srv_ssh",
+      connections: [
+        {
+          type: "remoteSsh",
+          host: "build-box",
+          remoteDaemon: { installDir: "/opt/paseo" },
+        },
+      ],
+    });
+
+    expect(profile?.connections[0]).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: { installDir: "/opt/paseo" },
+    });
+  });
 });
 
 describe("createRemoteSshHostConnection", () => {
+  it("remembers that the user asked Paseo to set the host up", () => {
+    expect(
+      createRemoteSshHostConnection({
+        host: "build-box",
+        remoteDaemon: { remoteHome: " /srv/paseo ", installDir: "", version: "0.7.2" },
+      }),
+    ).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: { remoteHome: "/srv/paseo", version: "0.7.2" },
+    });
+  });
+
+  it("keeps a bare opt-in, which is what the Add-host checkbox produces", () => {
+    expect(createRemoteSshHostConnection({ host: "build-box", remoteDaemon: {} })).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: {},
+    });
+  });
+
   it("keeps optional SSH settings absent", () => {
     expect(createRemoteSshHostConnection({ host: "build-box" })).toEqual({
       id: "ssh:build-box::",
