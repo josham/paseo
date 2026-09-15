@@ -38,6 +38,7 @@ git log --first-parent --format=%s edge-v1.1.0 | grep '^edge: merge '
 | Branch                    | What it is                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `main`                    | A mirror of `upstream/main`. Never commit to it.                                                                       |
+| `edge/base`               | Disposable. Force-pushed to `upstream/main` by `scripts/edge/sync-prs.sh`, and used only as a base for the fork's PRs.  |
 | `feat/*`, `fix/*`, `bd/*` | Ordinary work, cut from `upstream/main`. These are the branches that become upstream PRs.                              |
 | `pr/<number>-<slug>`      | A re-land of someone else's upstream PR, named for it.                                                                 |
 | `edge/tooling`            | This doc, `scripts/edge/`, and the two `edge-*-release.yml` workflows. The only branch the fork owns.                  |
@@ -55,6 +56,46 @@ and names an author where the branch re-lands someone else's PR.
 Review still happens on the feature branches — the same ones that go upstream — not on
 `edge/main`.
 
+## Pull requests
+
+Every carried branch has one open **draft** PR on this fork, and it stays open for as
+long as the fork carries the branch. [The list of them](https://github.com/josham/paseo/pulls)
+is the readable index of what Edge adds: a rendered diff and a written description per
+change, without checking out a branch to find out. It is also most of an upstream PR
+already, for the day a change has somewhere upstream to go.
+
+They are a reading surface, not a merge queue. **Nothing is ever merged through them** —
+a change reaches a build only by its line in `scripts/edge/branches.txt`. Two rules keep
+that from being a trap:
+
+- **The base is `edge/base`**, a throwaway mirror of `upstream/main` that nothing builds
+  from. It is deliberately not `main`: the first attempt at this (josham/paseo#1) used
+  the mirror as its base and had to be abandoned, because the PR sat there with a live
+  merge button pointing at the branch every rebase depends on. Merging into `edge/base`
+  costs nothing — the next `sync-prs.sh` force-pushes it back. Basing on anything but
+  `main` also keeps upstream's inherited `ci.yml` quiet: it fires on
+  `pull_request: branches: [main]`, and a PR into `main` really does start a
+  25-minute run here.
+- **Every PR is a draft.** A draft has no merge button at all, so the misclick is not
+  merely cheap, it is unavailable.
+
+A branch stacked on another carried branch is based on that branch instead, so its diff
+shows only its own change: `edge/container-build-progress` is +202 against
+`pr/2453-devcontainer` and +11537 against upstream. Nothing records which branch that
+is — `sync-prs.sh` works it out as the nearest carried branch that is an ancestor, so it
+cannot drift. PR numbers are likewise not written down anywhere; they are looked up by
+head branch, leaving `branches.txt` the one place a branch is declared.
+
+```bash
+scripts/edge/sync-prs.sh              # move edge/base, report every branch's PR
+scripts/edge/sync-prs.sh --check      # exit non-zero if one is missing or misfiled
+```
+
+It prints the `gh pr create` line for a branch that has no PR yet, but does not run it:
+the body is the point, and an empty one would be worse than no PR. It also flags an open
+PR whose branch has left `branches.txt` — retiring a branch is one deleted line there and
+one closed PR here.
+
 ## Adding a change to the build
 
 ```bash
@@ -71,6 +112,10 @@ someone reading the releases page:
 ```
 bd/my-change  # What it does (upstream PR #1234)
 ```
+
+Then open its draft PR, so the branch shows up in the index rather than only in the
+manifest — `scripts/edge/sync-prs.sh` prints the `gh pr create` line for any branch that
+is missing one. See [Pull requests](#pull-requests).
 
 Push that, and rebuild:
 
