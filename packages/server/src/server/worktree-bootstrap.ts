@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { Logger } from "pino";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
+import type { ProcessLaunchStrategy } from "./devcontainer/launch-strategy.js";
 import type { TerminalSession } from "../terminal/terminal.js";
 import {
   getScriptConfigs,
@@ -739,6 +740,17 @@ export interface SpawnWorkspaceScriptOptions {
   globalServicePorts?: PaseoServicePortAllocation;
   logger?: Logger;
   onLifecycleChanged?: () => void;
+  /**
+   * Resolves where the script's terminal runs. A workspace backed by a
+   * container must run its scripts inside that container: the commands come
+   * from the workspace's own `paseo.json`, which any agent with write access
+   * to the worktree can edit, so running them on the host would hand that
+   * agent host execution.
+   */
+  resolveLaunchStrategy?: (
+    cwd: string,
+    workspaceId: string,
+  ) => Promise<ProcessLaunchStrategy | null>;
 }
 
 interface ServiceScriptSetupResult {
@@ -858,6 +870,7 @@ async function acquireWorkspaceScriptTerminal(params: {
   workspaceId: string;
   scriptName: string;
   env: Record<string, string> | undefined;
+  resolveLaunchStrategy: SpawnWorkspaceScriptOptions["resolveLaunchStrategy"];
 }): Promise<{ terminal: TerminalSession; reusableTerminal: TerminalSession | null }> {
   const {
     serviceScript,
@@ -867,20 +880,26 @@ async function acquireWorkspaceScriptTerminal(params: {
     workspaceId,
     scriptName,
     env,
+    resolveLaunchStrategy,
   } = params;
   let reusableTerminal: TerminalSession | null = null;
   if (!serviceScript && existingRuntimeEntry?.terminalId) {
     reusableTerminal = terminalManager.getTerminal(existingRuntimeEntry.terminalId) ?? null;
   }
-  const terminal =
-    reusableTerminal ??
-    (await terminalManager.createTerminal({
-      cwd: repoRoot,
-      workspaceId,
-      name: scriptName,
-      title: scriptName,
-      env,
-    }));
+  if (reusableTerminal) {
+    return { terminal: reusableTerminal, reusableTerminal };
+  }
+  // Only needed for a fresh terminal, and resolving it can wait on (or refuse
+  // over) a container that a reused terminal is already living in.
+  const launchStrategy = (await resolveLaunchStrategy?.(repoRoot, workspaceId)) ?? null;
+  const terminal = await terminalManager.createTerminal({
+    cwd: repoRoot,
+    workspaceId,
+    name: scriptName,
+    title: scriptName,
+    env,
+    containerExec: launchStrategy?.serialize() ?? null,
+  });
   return { terminal, reusableTerminal };
 }
 
@@ -902,6 +921,7 @@ export async function spawnWorkspaceScript(
     globalServicePorts,
     logger,
     onLifecycleChanged,
+    resolveLaunchStrategy,
   } = options;
   const configResult = readPaseoConfig(repoRoot);
   if (!configResult.ok) {
@@ -958,6 +978,7 @@ export async function spawnWorkspaceScript(
       workspaceId,
       scriptName,
       env,
+      resolveLaunchStrategy,
     });
 
     runtimeStore.set({

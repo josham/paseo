@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Logger } from "pino";
 
@@ -467,6 +470,57 @@ test("interruptActiveTurn only interrupts the active query without info logs", a
     expect(internal.input).not.toBeNull();
     expect(internal.queryRestartNeeded).toBe(false);
   } finally {
+    await session.close();
+  }
+});
+
+test("stopRuntime retires the process without reporting it as a crash", async () => {
+  // What a container rebuild does: the runtime has to go, but the user asked to
+  // rebuild, not to fail a turn. The exit must therefore reach nobody.
+  const session = await createSession();
+  const internal: {
+    query: unknown;
+    input: { end: () => void } | null;
+    childProcess: ChildProcess | null;
+    handleRuntimeExit: (
+      child: ChildProcess,
+      code: number | null,
+      signal: NodeJS.Signals | null,
+    ) => void;
+  } = asInternals(session);
+
+  // A real process, because tree-killing one is the part that has to work.
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+    stdio: "ignore",
+  });
+  await once(child, "spawn");
+  const events: AgentStreamEvent[] = [];
+  const unsubscribe = session.subscribe((event) => events.push(event));
+  const end = vi.fn(() => undefined);
+  internal.query = { close: vi.fn(() => undefined), return: vi.fn(async () => undefined) };
+  internal.input = { end };
+  internal.childProcess = child;
+
+  // Subscribed before the call: stopRuntime kills the process, so a listener
+  // attached afterwards would wait for an event that already fired.
+  const exited = once(child, "exit");
+
+  try {
+    await session.stopRuntime?.();
+    await exited;
+
+    expect(internal.query).toBeNull();
+    expect(internal.input).toBeNull();
+    expect(internal.childProcess).toBeNull();
+    expect(end).toHaveBeenCalledTimes(1);
+
+    // The dead process reports the way a real one does. Detached, it is not
+    // ours any more, so it produces no turn failure.
+    internal.handleRuntimeExit(child, 137, null);
+    expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
+  } finally {
+    unsubscribe();
+    child.kill("SIGKILL");
     await session.close();
   }
 });
