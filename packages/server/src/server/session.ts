@@ -51,7 +51,7 @@ import {
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
-import { resolveHandoffNarrative } from "./agent/handoff/narrative.js";
+import { resolveAskSource, resolveHandoffNarrative } from "./agent/handoff/narrative.js";
 import { waitForAgentWithTimeout } from "./agent/mcp-shared.js";
 import { planHandoff } from "./agent/handoff/plan.js";
 import {
@@ -8029,9 +8029,15 @@ export class Session {
         ...(msg.target ? { target: msg.target } : {}),
         timeline: this.agentManager.getTimeline(msg.agentId),
         gitReader: this.workspaceGitService,
-        generateNarrative: (digest, cwd) =>
-          this.generateHandoffNarrativeForCwd(digest, cwd, {
-            askSource: msg.askSourceAgent === true ? msg.agentId : null,
+        generateNarrative: (narrativeInput) =>
+          this.generateHandoffNarrativeForCwd(narrativeInput.digest, narrativeInput.cwd, {
+            askSource: resolveAskSource({
+              mode: msg.askSourceAgent,
+              sourceProvider: narrativeInput.sourceProvider,
+              targetProvider: narrativeInput.targetProvider,
+            })
+              ? msg.agentId
+              : null,
           }),
       });
 

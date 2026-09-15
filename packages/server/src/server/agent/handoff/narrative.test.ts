@@ -6,6 +6,7 @@ import {
   generateHandoffNarrative,
   renderHandoffNarrative,
   requestHandoffNarrativeFromSource,
+  resolveAskSource,
   resolveHandoffNarrative,
 } from "./narrative.js";
 
@@ -206,5 +207,28 @@ describe("narrative tier preference", () => {
 
     expect(narrative).toEqual({ origin: "summarizer", text: "Next step: From the summarizer" });
     expect(asked).toBe(true);
+  });
+});
+
+describe("ask-source mode", () => {
+  test("asks by default only when the provider changes", () => {
+    expect(
+      resolveAskSource({ mode: undefined, sourceProvider: "claude", targetProvider: "codex" }),
+    ).toBe(true);
+    expect(
+      resolveAskSource({ mode: "auto", sourceProvider: "claude", targetProvider: "codex" }),
+    ).toBe(true);
+    expect(
+      resolveAskSource({ mode: "auto", sourceProvider: "claude", targetProvider: "claude" }),
+    ).toBe(false);
+  });
+
+  test("honors an explicit choice against the default either way", () => {
+    expect(
+      resolveAskSource({ mode: "always", sourceProvider: "claude", targetProvider: "claude" }),
+    ).toBe(true);
+    expect(
+      resolveAskSource({ mode: "never", sourceProvider: "claude", targetProvider: "codex" }),
+    ).toBe(false);
   });
 });

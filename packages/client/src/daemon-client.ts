@@ -674,11 +674,12 @@ export interface AgentHandoffTarget {
 export interface CreateAgentHandoffOptions {
   target?: AgentHandoffTarget;
   /**
-   * Ask the source agent to write the brief's notes itself. Costs it a turn of
-   * its own context, so it is off by default; the daemon falls back to
-   * summarizing the timeline when the source cannot answer.
+   * Whether the source agent writes the brief's notes itself. Costs it a turn of
+   * its own context. "auto" (the default) asks only when the provider changes.
+   * The daemon falls back to summarizing the timeline when the source cannot
+   * answer.
    */
-  askSourceAgent?: boolean;
+  askSourceAgent?: "auto" | "always" | "never";
   requestId?: string;
   timeout?: number;
 }

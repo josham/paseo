@@ -87,7 +87,7 @@ import { registerBrowserTools } from "../../browser-tools/tools.js";
 import { createAgentStructuredTextGeneration } from "../../session/checkout/git-metadata-generator.js";
 import { planHandoff } from "../handoff/plan.js";
 import { parseHandoffProviderArg } from "../handoff/target-config.js";
-import { resolveHandoffNarrative } from "../handoff/narrative.js";
+import { resolveAskSource, resolveHandoffNarrative } from "../handoff/narrative.js";
 import type { BrowserToolsBroker } from "../../browser-tools/broker.js";
 import type {
   PaseoToolCatalog,
@@ -2085,11 +2085,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         modeId: z.string().optional(),
         thinkingOptionId: z.string().optional(),
         askSourceAgent: z
-          .boolean()
+          .enum(["auto", "always", "never"])
           .optional()
           .describe(
-            "Ask the source agent to write the notes itself. Costs it a turn of its own " +
-              "context, so leave it off when handing off because context is running out.",
+            "Whether the source agent writes the brief's notes itself. Costs it a turn of " +
+              "its own context. auto (default) asks only when the provider changes; use " +
+              "never when handing off because context is running out.",
           ),
       },
       outputSchema: {
@@ -2146,13 +2147,18 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
         timeline: agentManager.getTimeline(sourceAgentId),
         gitReader: gitService,
-        generateNarrative: (digest, cwd) =>
+        generateNarrative: (narrativeInput) =>
           resolveHandoffNarrative({
-            digest,
-            cwd,
+            digest: narrativeInput.digest,
+            cwd: narrativeInput.cwd,
             logger: childLogger,
             askSource:
-              args.askSourceAgent === true && source.lifecycle === "idle"
+              source.lifecycle === "idle" &&
+              resolveAskSource({
+                mode: args.askSourceAgent,
+                sourceProvider: narrativeInput.sourceProvider,
+                targetProvider: narrativeInput.targetProvider,
+              })
                 ? async (prompt) => {
                     await sendPromptToAgent({
                       agentManager,
@@ -2170,7 +2176,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
                 : null,
             generate: ({ prompt, schema }) =>
               generation.generate({
-                cwd,
+                cwd: narrativeInput.cwd,
                 prompt,
                 schema,
                 schemaName: "HandoffNarrative",

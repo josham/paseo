@@ -59,13 +59,23 @@ describe("agent handoff", () => {
     return timeline.entries.filter((entry) => entry.item.type === "user_message").length;
   }
 
+  /**
+   * Agent creation returns before the initial prompt is dispatched, so the first
+   * message lands slightly after the handoff resolves. Poll rather than racing it.
+   */
   async function readFirstUserMessage(agentId: string): Promise<string> {
-    const timeline = await ctx.client.fetchAgentTimeline(agentId, { limit: 50 });
-    const first = timeline.entries.find((entry) => entry.item.type === "user_message")?.item;
-    if (first?.type !== "user_message") {
-      throw new Error(`Agent ${agentId} has no user message`);
+    const deadline = Date.now() + TURN_TIMEOUT_MS;
+    for (;;) {
+      const timeline = await ctx.client.fetchAgentTimeline(agentId, { limit: 50 });
+      const first = timeline.entries.find((entry) => entry.item.type === "user_message")?.item;
+      if (first?.type === "user_message") {
+        return first.text;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Agent ${agentId} has no user message`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    return first.text;
   }
 
   test("creates a successor carrying the brief and leaves the source running", async () => {
@@ -173,7 +183,7 @@ describe("agent handoff", () => {
     await ctx.client.waitForFinish(source.id, TURN_TIMEOUT_MS);
     const turnsBefore = await countUserMessages(source.id);
 
-    const handoff = await ctx.client.createAgentHandoff(source.id, { askSourceAgent: true });
+    const handoff = await ctx.client.createAgentHandoff(source.id, { askSourceAgent: "always" });
 
     // The source answered, so its own account wins over the summarizer's.
     const brief = await readFirstUserMessage(handoff.agentId!);

@@ -1903,12 +1903,14 @@ export const AgentCreateHandoffRequestMessageSchema = z.object({
     })
     .optional(),
   /**
-   * Ask the source agent to write the brief's notes itself. It sees reasoning the
-   * timeline never recorded, but answering costs it a turn of its own context —
-   * which is the usual reason to hand off — so this is off by default and falls
-   * back to summarizing the timeline when the source cannot answer.
+   * Whether to ask the source agent to write the brief's notes itself. It sees
+   * reasoning the timeline never recorded, but answering costs it a turn of its
+   * own context. "auto" (the default) asks only when the provider changes, where
+   * the payoff is highest and context pressure is least likely to be the reason
+   * for handing off. Falls back to summarizing the timeline whenever the source
+   * cannot answer.
    */
-  askSourceAgent: z.boolean().optional(),
+  askSourceAgent: z.enum(["auto", "always", "never"]).optional(),
   requestId: z.string(),
 });
 

@@ -22,11 +22,18 @@ export interface PrepareHandoffInput {
   timeline: readonly AgentTimelineItem[];
   gitReader: HandoffGitReader;
   /**
-   * Produces the DECLARED section. Returning null is expected and fine — a
-   * summarizer may be unavailable, and the source session may be too wedged to
-   * speak for itself, which is when handoffs are needed most.
+   * Produces the DECLARED section. Receives the resolved target so the caller can
+   * decide whether asking the source agent is worth a turn of its context.
+   * Returning null is expected and fine — a summarizer may be unavailable, and the
+   * source session may be too wedged to speak for itself, which is when handoffs
+   * are needed most.
    */
-  generateNarrative: (digest: string, cwd: string) => Promise<HandoffNarrative | null>;
+  generateNarrative: (input: {
+    digest: string;
+    cwd: string;
+    sourceProvider: string;
+    targetProvider: string;
+  }) => Promise<HandoffNarrative | null>;
 }
 
 export interface PreparedHandoff {
@@ -47,7 +54,12 @@ export async function prepareHandoff(input: PrepareHandoffInput): Promise<Prepar
 
   const [git, narrative] = await Promise.all([
     readHandoffGitFacts(input.gitReader, input.source.cwd),
-    input.generateNarrative(renderTimelineDigest(input.timeline), input.source.cwd),
+    input.generateNarrative({
+      digest: renderTimelineDigest(input.timeline),
+      cwd: input.source.cwd,
+      sourceProvider: input.source.provider,
+      targetProvider: input.target.provider,
+    }),
   ]);
 
   return {
