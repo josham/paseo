@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
+import { createPromptHistoryFile, PromptHistoryStore } from "./prompt-history/store.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
@@ -534,6 +535,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly agentStorage: AgentStorage;
   private readonly messageReceipts: MessageReceipts;
   private readonly creationService: CreationService;
+  private readonly promptHistory: PromptHistoryStore;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
   private readonly workspaceLabelService: WorkspaceLabelService | null;
@@ -679,6 +681,10 @@ export class VoiceAssistantWebSocketServer {
       (snapshot) => this.validateCompletedCreation(snapshot),
       join(paseoHome, "agent-requests"),
     );
+    this.promptHistory = new PromptHistoryStore({
+      file: createPromptHistoryFile(join(paseoHome, "prompt-history.json")),
+      onError: (error, message) => this.logger.warn({ err: error }, message),
+    });
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();
     this.workspaceLabelService = workspaceLabelService ?? null;
@@ -1458,6 +1464,7 @@ export class VoiceAssistantWebSocketServer {
       creationService: this.creationService,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
+      promptHistory: this.promptHistory,
       workspaceLabelService: this.workspaceLabelService ?? undefined,
       directorySync: this.directorySync,
       scheduleService: this.scheduleService,
@@ -1678,6 +1685,8 @@ export class VoiceAssistantWebSocketServer {
         agentRequestReceipts: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,
+        // COMPAT(promptHistory): added in v0.8.0; remove gate after 2027-03-10.
+        promptHistory: true,
         hubAgentRpc: true,
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
         directorySync: true,
