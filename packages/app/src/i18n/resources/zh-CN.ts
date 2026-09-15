@@ -1562,6 +1562,10 @@ export const zhCN: TranslationResources = {
     searchPlaceholder: "搜索模型...",
     openProviderSettings: "打开 {{provider}} 设置",
   },
+  handoff: {
+    starting: "正在移交给 {{provider}}...",
+    startingModel: "正在移交给 {{provider}}（{{model}}）...",
+  },
   providerCatalog: {
     title: "添加 provider",
     search: "搜索 providers",

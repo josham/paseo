@@ -1608,6 +1608,10 @@ export const ru: TranslationResources = {
     searchPlaceholder: "Поиск моделей...",
     openProviderSettings: "Открыть настройки {{provider}}",
   },
+  handoff: {
+    starting: "Передача в {{provider}}...",
+    startingModel: "Передача в {{provider}} ({{model}})...",
+  },
   providerCatalog: {
     title: "Добавить провайдера",
     search: "Поиск провайдеров",

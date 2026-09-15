@@ -42,6 +42,7 @@ import type {
   FileVersion,
   FileWriteResult,
   FetchAgentTimelineResponseMessage,
+  AgentCreateHandoffResponseMessage,
   AgentForkContextResponseMessage,
   GitSetupOptions,
   CheckoutStatusResponse,
@@ -575,6 +576,7 @@ type ScheduleUpdatePayload = Extract<
 >["payload"];
 export type FetchAgentTimelinePayload = FetchAgentTimelineResponseMessage["payload"];
 export type AgentForkContextPayload = AgentForkContextResponseMessage["payload"];
+export type AgentCreateHandoffPayload = AgentCreateHandoffResponseMessage["payload"];
 
 export type FetchAgentTimelineDirection = FetchAgentTimelinePayload["direction"];
 export type FetchAgentTimelineProjection = FetchAgentTimelinePayload["projection"];
@@ -658,6 +660,27 @@ export interface AgentForkContextOptions {
   boundaryCursor?: FetchAgentTimelineCursor;
   boundaryMessageId?: string;
   requestId?: string;
+}
+
+/** Fields left out are inherited from the source agent. */
+export interface AgentHandoffTarget {
+  provider?: string;
+  model?: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+  featureValues?: Record<string, unknown>;
+}
+
+export interface CreateAgentHandoffOptions {
+  target?: AgentHandoffTarget;
+  /**
+   * Ask the source agent to write the brief's notes itself. Costs it a turn of
+   * its own context, so it is off by default; the daemon falls back to
+   * summarizing the timeline when the source cannot answer.
+   */
+  askSourceAgent?: boolean;
+  requestId?: string;
+  timeout?: number;
 }
 
 type AgentRefreshedStatusPayload = z.infer<typeof AgentRefreshedStatusPayloadSchema>;
@@ -3319,6 +3342,47 @@ export class DaemonClient {
       options: { skipQueue: true },
       select: (msg) => {
         if (msg.type !== "agent.fork_context.response") {
+          return null;
+        }
+        if (msg.payload.requestId !== resolvedRequestId) {
+          return null;
+        }
+        return msg.payload;
+      },
+    });
+
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+
+    return payload;
+  }
+
+  /**
+   * Hands this agent's work to a new one, which starts from a generated brief.
+   * The source agent keeps running; closing it is the caller's decision.
+   */
+  async createAgentHandoff(
+    agentId: string,
+    options: CreateAgentHandoffOptions = {},
+  ): Promise<AgentCreateHandoffPayload> {
+    const resolvedRequestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.create_handoff.request",
+      agentId,
+      requestId: resolvedRequestId,
+      ...(options.target ? { target: options.target } : {}),
+      ...(options.askSourceAgent === undefined ? {} : { askSourceAgent: options.askSourceAgent }),
+    });
+
+    const payload = await this.sendRequest({
+      requestId: resolvedRequestId,
+      message,
+      // A handoff reads the timeline, diffs the workspace, summarizes it, and
+      // then starts a provider session, so it runs well past the default.
+      timeout: options.timeout ?? 120000,
+      select: (msg) => {
+        if (msg.type !== "agent.create_handoff.response") {
           return null;
         }
         if (msg.payload.requestId !== resolvedRequestId) {

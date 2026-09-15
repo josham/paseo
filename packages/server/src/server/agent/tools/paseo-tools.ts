@@ -84,6 +84,10 @@ import {
   createPaseoWorktreeCommand,
 } from "../../worktree/commands.js";
 import { registerBrowserTools } from "../../browser-tools/tools.js";
+import { createAgentStructuredTextGeneration } from "../../session/checkout/git-metadata-generator.js";
+import { planHandoff } from "../handoff/plan.js";
+import { parseHandoffProviderArg } from "../handoff/target-config.js";
+import { resolveHandoffNarrative } from "../handoff/narrative.js";
 import type { BrowserToolsBroker } from "../../browser-tools/broker.js";
 import type {
   PaseoToolCatalog,
@@ -106,7 +110,7 @@ export interface PaseoToolHostDependencies {
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
-    "getSnapshot" | "listWorktrees" | "resolveRepoRoot"
+    "getSnapshot" | "listWorktrees" | "resolveRepoRoot" | "getCheckoutDiff"
   >;
   findWorkspaceIdForCwd?: ArchiveDependencies["findWorkspaceIdForCwd"];
   listActiveWorkspaces?: ArchiveDependencies["listActiveWorkspaces"];
@@ -2060,6 +2064,165 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         content: [],
         structuredContent: ensureValidJson({ agents }),
+      };
+    },
+  );
+
+  registerTool(
+    "handoff_agent",
+    {
+      title: "Hand off agent work",
+      description:
+        "Create a new agent that continues this one's work from a generated brief, and leave this " +
+        "agent running. Use it when the context window is nearly full, or to move the work to a " +
+        "different provider, model, or mode — a running agent cannot change the process it is. " +
+        "The brief carries the original objective, the git working tree, the task list, and a " +
+        "summary; it does not carry the conversation. Omit a field to inherit it from this agent.",
+      inputSchema: {
+        agentId: z.string().optional(),
+        provider: z.string().optional().describe("Provider id, or the provider/model form"),
+        model: z.string().optional(),
+        modeId: z.string().optional(),
+        thinkingOptionId: z.string().optional(),
+        askSourceAgent: z
+          .boolean()
+          .optional()
+          .describe(
+            "Ask the source agent to write the notes itself. Costs it a turn of its own " +
+              "context, so leave it off when handing off because context is running out.",
+          ),
+      },
+      outputSchema: {
+        agentId: z.string(),
+        provider: z.string(),
+        model: z.string().nullable(),
+        rootAgentId: z.string(),
+        chainDepth: z.number(),
+      },
+    },
+    async (args) => {
+      const sourceAgentId = args.agentId ?? callerAgentId;
+      if (!sourceAgentId) {
+        throw new Error("handoff_agent requires an agentId when called outside an agent session");
+      }
+
+      const source = await ensureAgentLoaded(sourceAgentId, {
+        agentManager,
+        agentStorage,
+        logger: childLogger,
+      });
+      const record = await agentStorage.get(sourceAgentId);
+      const gitService = options.workspaceGitService;
+      if (!gitService) {
+        throw new Error("handoff_agent requires workspace git access");
+      }
+
+      const generation = createAgentStructuredTextGeneration({
+        agentManager,
+        providerSnapshotManager,
+        readDaemonConfig: () => ({
+          metadataGeneration: options.daemonConfigStore?.get().metadataGeneration,
+        }),
+        getFocusedSelection: () => ({
+          provider: source.config.provider,
+          model: source.config.model ?? null,
+        }),
+      });
+
+      const plan = await planHandoff({
+        source: {
+          id: sourceAgentId,
+          cwd: source.cwd,
+          labels: record?.labels ?? {},
+          config: source.config,
+        },
+        target: {
+          ...(parseHandoffProviderArg(args.provider, args.model) as {
+            provider?: AgentProvider;
+            model?: string;
+          }),
+          ...(args.modeId ? { modeId: args.modeId } : {}),
+          ...(args.thinkingOptionId ? { thinkingOptionId: args.thinkingOptionId } : {}),
+        },
+        timeline: agentManager.getTimeline(sourceAgentId),
+        gitReader: gitService,
+        generateNarrative: (digest, cwd) =>
+          resolveHandoffNarrative({
+            digest,
+            cwd,
+            logger: childLogger,
+            askSource:
+              args.askSourceAgent === true && source.lifecycle === "idle"
+                ? async (prompt) => {
+                    await sendPromptToAgent({
+                      agentManager,
+                      agentStorage,
+                      agentId: sourceAgentId,
+                      prompt,
+                      unarchive: false,
+                      logger: childLogger,
+                    });
+                    const result = await waitForAgentWithTimeout(agentManager, sourceAgentId, {
+                      waitForActive: true,
+                    });
+                    return result.lastMessage;
+                  }
+                : null,
+            generate: ({ prompt, schema }) =>
+              generation.generate({
+                cwd,
+                prompt,
+                schema,
+                schemaName: "HandoffNarrative",
+                agentTitle: "Handoff brief generator",
+              }),
+          }),
+      });
+
+      const { snapshot } = await createAgentCommand(
+        {
+          agentManager,
+          agentStorage,
+          logger: childLogger,
+          paseoHome: options.paseoHome,
+          worktreesRoot: options.worktreesRoot,
+          terminalManager,
+          providerSnapshotManager,
+          createPaseoWorktree: options.createPaseoWorktree,
+          ...(options.ensureWorkspaceForCreate
+            ? { ensureWorkspaceForCreate: options.ensureWorkspaceForCreate }
+            : {}),
+        },
+        {
+          kind: "mcp",
+          provider: plan.config.provider,
+          // The successor is doing the same work, so it keeps the same name.
+          // Deriving one from the brief would title it "Handoff brief".
+          title: source.config.title ?? "Continued work",
+          initialPrompt: plan.brief,
+          config: plan.config,
+          cwd: source.cwd,
+          ...(source.workspaceId ? { workspaceId: source.workspaceId } : {}),
+          ...(plan.config.modeId ? { mode: plan.config.modeId } : {}),
+          ...(plan.config.thinkingOptionId ? { thinking: plan.config.thinkingOptionId } : {}),
+          labels: plan.labels,
+          background: true,
+          notifyOnFinish: false,
+          // A successor continues the same work at the same level. Parenting it to
+          // the caller would make it a subagent, which it is not.
+          detached: true,
+        },
+      );
+
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: snapshot.id,
+          provider: plan.config.provider,
+          model: plan.config.model ?? null,
+          rootAgentId: plan.rootAgentId,
+          chainDepth: plan.chainDepth,
+        }),
       };
     },
   );
