@@ -165,20 +165,26 @@ export class ContainerProbeCoordinator {
       kind: "probe",
       workspaceFolder: request.cwd,
     };
+    // The project belongs to the probe's identity, so it has to be on the ref
+    // itself rather than injected at the `up` call: `stop` reads it too, and a
+    // teardown that does not know the project falls back to matching every
+    // compose container on this folder — which is how a probe came to `docker
+    // rm -f` the container VS Code was attached to, and how its own sibling
+    // services were left running under a name nothing would ever ask for again.
+    //
+    // Compose resolves by project, so without one of its own a probe's `up` also
+    // lands on the container the workspace is using.
+    const probeRef: ContainerRef = { ...ref, composeProject: composeProjectNameFor(ref.key) };
+
     const emitProgress = (line: string): void => {
       for (const subscriber of subscribers.values()) subscriber(line);
     };
 
     try {
       const handle = await backend.up({
-        ...ref,
+        ...probeRef,
         onProgress: emitProgress,
         signal,
-        // The key alone is not identity enough for a compose config: compose
-        // resolves by project, so without a project of its own a probe's `up`
-        // lands on the container the workspace is using — and the probe's handle
-        // then points at it, so cleanup stops a container with agents in it.
-        composeProject: composeProjectNameFor(ref.key),
       });
       signal.throwIfAborted();
       const entries = await this.deps.probeProviders({
@@ -197,7 +203,7 @@ export class ContainerProbeCoordinator {
     } finally {
       // The container is scratch either way: on success its answers are already
       // in hand, and on failure or cancellation it is a half-built leftover.
-      await backend.stop(ref, { remove: true }).catch((error: unknown) => {
+      await backend.stop(probeRef, { remove: true }).catch((error: unknown) => {
         this.logger.warn({ err: error, key: ref.key }, "Failed to remove probe container");
       });
     }
