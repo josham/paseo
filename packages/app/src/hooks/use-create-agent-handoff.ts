@@ -11,7 +11,7 @@ export interface CreateAgentHandoffInput {
   serverId: string;
   agentId: string;
   target?: AgentHandoffTarget;
-  askSourceAgent?: boolean;
+  askSourceAgent?: "auto" | "always" | "never";
 }
 
 /**

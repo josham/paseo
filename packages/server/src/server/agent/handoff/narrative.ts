@@ -188,3 +188,31 @@ export async function resolveHandoffNarrative(
   }
   return generateHandoffNarrative(options);
 }
+
+export type AskSourceMode = "auto" | "always" | "never";
+
+/**
+ * Whether to spend a turn of the source agent's context on its own handoff notes.
+ *
+ * `auto` asks only when the provider changes, because that is where the payoff
+ * and the cost diverge. Crossing providers, the successor cannot infer intent
+ * from a transcript written in another model's idiom, and the switch is usually
+ * made for capability rather than because context ran out. Staying on the same
+ * provider, the handoff is normally *triggered* by context pressure, so asking
+ * spends the scarce thing — and a session that has already compacted knows less
+ * than the timeline, which Paseo retains in full.
+ */
+export function resolveAskSource(input: {
+  mode: AskSourceMode | undefined;
+  sourceProvider: string;
+  targetProvider: string;
+}): boolean {
+  switch (input.mode ?? "auto") {
+    case "always":
+      return true;
+    case "never":
+      return false;
+    default:
+      return input.sourceProvider !== input.targetProvider;
+  }
+}

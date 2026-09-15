@@ -1,7 +1,6 @@
 import type { AgentSessionConfig, AgentTimelineItem } from "../agent-sdk-types.js";
-import type { HandoffNarrative } from "./brief.js";
 import type { HandoffGitReader } from "./git-facts.js";
-import { prepareHandoff } from "./prepare.js";
+import { prepareHandoff, type PrepareHandoffInput } from "./prepare.js";
 import { resolveHandoffTargetConfig, type HandoffTargetRequest } from "./target-config.js";
 
 export interface PlanHandoffInput {
@@ -14,7 +13,7 @@ export interface PlanHandoffInput {
   target?: HandoffTargetRequest;
   timeline: readonly AgentTimelineItem[];
   gitReader: HandoffGitReader;
-  generateNarrative: (digest: string, cwd: string) => Promise<HandoffNarrative | null>;
+  generateNarrative: PrepareHandoffInput["generateNarrative"];
 }
 
 export interface HandoffPlan {
