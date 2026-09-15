@@ -1748,6 +1748,85 @@ dockerTest(
 );
 
 dockerTest(
+  "real backend: a teardown that names its project leaves a foreign stack alone",
+  async () => {
+    // The backend half of the 2026-09-15 field bug: a teardown that *does* name
+    // its compose project must confine itself to that project, even though a
+    // foreign stack (VS Code's, carrying no paseo.container label) sits on the
+    // same folder and would match the fallback query.
+    //
+    // The other half -- the probe coordinator actually passing its project to
+    // `stop` rather than only to `up` -- is pinned in
+    // container-probe-coordinator.test.ts, which is where the regression lived.
+    // This test passes with or without that wiring; it guards the contract this
+    // one depends on.
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-foreign-"));
+    const composePath = path.join(cwd, "docker-compose.yml");
+    const foreignProject = `foreign-${Date.now()}`;
+    writeFileSync(
+      composePath,
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:latest",
+        "    command: sleep infinity",
+        "    labels:",
+        `      devcontainer.local_folder: ${cwd}`,
+        "  db:",
+        "    image: alpine:latest",
+        "    command: sleep infinity",
+        "    labels:",
+        `      devcontainer.local_folder: ${cwd}`,
+        "",
+      ].join("\n"),
+    );
+
+    const compose = (...args: string[]) =>
+      execFileSync("docker", ["compose", "-p", foreignProject, "-f", composePath, ...args]);
+    const idsInProject = () =>
+      execFileSync("docker", [
+        "ps",
+        "-aq",
+        "--filter",
+        `label=com.docker.compose.project=${foreignProject}`,
+      ])
+        .toString()
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    try {
+      compose("up", "-d");
+      expect(idsInProject()).toHaveLength(2);
+
+      // A probe on the same folder, carrying its own project the way the
+      // coordinator builds its ref.
+      await backend.stop(
+        {
+          key: "probe:foreign-guard",
+          kind: "probe",
+          workspaceFolder: cwd,
+          composeProject: "paseo-probe-foreign-guard",
+        },
+        { remove: true },
+      );
+
+      // Untouched: both services still there, same ids.
+      expect(idsInProject()).toHaveLength(2);
+    } finally {
+      try {
+        compose("down", "-v");
+      } catch {
+        /* best effort */
+      }
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
+
+dockerTest(
   "real backend: probe containers left by a previous run are reaped, workspace ones are not",
   async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
