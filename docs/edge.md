@@ -96,6 +96,31 @@ the body is the point, and an empty one would be worse than no PR. It also flags
 PR whose branch has left `branches.txt` — retiring a branch is one deleted line there and
 one closed PR here.
 
+A branch with an open PR **upstream** gets no PR here — that one is already the review
+surface, and two for one change is one too many. `sync-prs.sh` works this out by asking
+upstream for our open PRs, so the exemption lapses by itself the day upstream closes or
+merges one.
+
+### What goes in the body
+
+**Thin, by default.** Status and gaps: what it is, where it stands upstream, what it is
+stacked on, whether it has a server half, and what was never verified. The *rationale*
+stays in the commit messages, which are already dense here — every branch is one to three
+commits, each a complete description of one change. A body that restates them is a second
+copy that goes stale the moment the branch is amended, while the commit stays true.
+
+**Full, for the branches that could still go upstream.** Only fixes have a route —
+upstream closes features with a pointer to Discussions — so for a fix with no upstream PR
+yet, a complete body is worth writing, because it becomes that PR's description on the day
+it is filed. What blocks those is usually not the prose: `CONTRIBUTING.md` wants a
+recording or before/after screenshots, and media cannot be attached through `gh`.
+
+The same split decides how much a review is worth. `edge/agent-tool-hardening` changes who
+may spawn an unattended agent and which credentials reach a spawned process, and it reaches
+a self-updating build without passing through upstream review or CI — the fork's inherited
+CI does not run on these branches, by the same design that keeps it quiet. Point
+`/code-review <PR#>` at those.
+
 ## Adding a change to the build
 
 ```bash
