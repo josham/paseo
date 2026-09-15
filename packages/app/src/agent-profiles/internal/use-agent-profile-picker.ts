@@ -7,9 +7,9 @@ import { useSessionStore } from "@/stores/session-store";
 import { useToast } from "@/contexts/toast-context";
 import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
+import { resolveProfileApplication } from "./profile-application";
 import {
   materializeAgentProfile,
-  reconcileMaterializedProfileMode,
   toAgentConfigApply,
   type MaterializedAgentProfile,
 } from "./materialize-profile";
@@ -22,7 +22,15 @@ export interface DraftAgentProfileControls {
 }
 
 export type AgentProfileApplyTarget =
-  | { kind: "agent"; agentId: string; availableModeIds: readonly string[] | null }
+  | {
+      kind: "agent";
+      agentId: string;
+      /** The provider the agent is running as; a profile naming another hands off. */
+      currentProvider: string;
+      availableModeIds: readonly string[] | null;
+      /** Absent when the surface cannot hand off; cross-provider profiles are then ignored. */
+      handoff?: (profile: MaterializedAgentProfile) => void;
+    }
   | { kind: "draft"; controls: DraftAgentProfileControls };
 
 /** Everything the model picker renders for one profile. It never sees the profile itself. */
@@ -134,23 +142,33 @@ export function useAgentProfilePicker(
       if (!profile) {
         return;
       }
-      const resolved = materializeAgentProfile(profile);
+      const application = resolveProfileApplication({
+        profile: materializeAgentProfile(profile),
+        target,
+      });
 
-      if (target.kind === "draft") {
-        target.controls.applyProfile(resolved);
+      if (application.kind === "wait") {
+        return;
+      }
+      if (application.kind === "draft") {
+        if (target.kind === "draft") {
+          target.controls.applyProfile(application.profile);
+        }
+        return;
+      }
+      if (application.kind === "handoff") {
+        if (target.kind === "agent") {
+          target.handoff?.(application.profile);
+        }
         return;
       }
 
-      const reconciled = reconcileMaterializedProfileMode(resolved, target.availableModeIds);
-      if (!reconciled) {
-        return;
-      }
-      persistSelection(reconciled);
-      if (!client) {
+      persistSelection(application.profile);
+      if (!client || target.kind !== "agent") {
         return;
       }
       void client
-        .applyAgentConfig(target.agentId, toAgentConfigApply(reconciled))
+        .applyAgentConfig(target.agentId, toAgentConfigApply(application.profile))
         .then((notice) => showProviderNoticeToast(toast, notice))
         .catch((error) => {
           console.warn("[useAgentProfilePicker] applyAgentConfig failed", error);
