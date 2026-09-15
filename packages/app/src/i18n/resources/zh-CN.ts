@@ -465,6 +465,11 @@ export const zhCN: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "符号链接",
+        outsideWorkspace: "在工作区之外",
+        broken: "目标缺失",
+      },
       sort: {
         name: "名称",
         modified: "修改时间",

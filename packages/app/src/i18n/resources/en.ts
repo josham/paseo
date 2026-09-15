@@ -463,6 +463,11 @@ export const en = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "Symlink",
+        outsideWorkspace: "outside workspace",
+        broken: "missing target",
+      },
       sort: {
         name: "Name",
         modified: "Modified",

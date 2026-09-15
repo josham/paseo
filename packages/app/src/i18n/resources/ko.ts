@@ -466,6 +466,11 @@ export const ko: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "심볼릭 링크",
+        outsideWorkspace: "작업 공간 외부",
+        broken: "대상 없음",
+      },
       sort: {
         name: "이름",
         modified: "수정일",
