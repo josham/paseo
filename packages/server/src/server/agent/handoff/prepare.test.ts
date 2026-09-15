@@ -103,7 +103,7 @@ describe("prepare handoff", () => {
           };
         },
       },
-      generateNarrative: async (digest) => ({
+      generateNarrative: async ({ digest }) => ({
         origin: "summarizer",
         text: `Next step: continue (${digest})`,
       }),

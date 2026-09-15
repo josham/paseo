@@ -19,6 +19,37 @@ describe("agent handoff messages", () => {
     expect(SessionInboundMessageSchema.parse(message)).toEqual(message);
   });
 
+  test("accepts each ask-source mode and treats absence as auto", () => {
+    for (const askSourceAgent of ["auto", "always", "never"]) {
+      const message = {
+        type: "agent.create_handoff.request",
+        agentId: "agent-1",
+        askSourceAgent,
+        requestId: "req-1",
+      };
+      expect(SessionInboundMessageSchema.parse(message)).toEqual(message);
+    }
+
+    expect(
+      AgentCreateHandoffRequestMessageSchema.parse({
+        type: "agent.create_handoff.request",
+        agentId: "agent-1",
+        requestId: "req-1",
+      }).askSourceAgent,
+    ).toBeUndefined();
+  });
+
+  test("rejects a boolean, which no longer expresses the three choices", () => {
+    expect(
+      AgentCreateHandoffRequestMessageSchema.safeParse({
+        type: "agent.create_handoff.request",
+        agentId: "agent-1",
+        askSourceAgent: true,
+        requestId: "req-1",
+      }).success,
+    ).toBe(false);
+  });
+
   test("accepts a request that names a full target profile", () => {
     const message = {
       type: "agent.create_handoff.request",
