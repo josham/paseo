@@ -119,6 +119,17 @@ export function createAudioEngine(
   const interruptionSubscription = native.addExpoTwoWayAudioEventListener(
     "onAudioInterruption",
     (event: { data: string }) => {
+      // A dead capture route is not an interruption: the stream is still running and audio
+      // focus is still held, it is just reading silence. Report it as an error and leave the
+      // session up, rather than tearing capture down the way "blocked" does.
+      if (event.data === "micSilent") {
+        callbacks.onError?.(
+          new Error(
+            "The microphone is not producing any audio. If a Bluetooth headset is connected, disconnect it and try again.",
+          ),
+        );
+        return;
+      }
       if (event.data !== "blocked") {
         return;
       }
