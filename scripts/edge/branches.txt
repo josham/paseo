@@ -28,6 +28,8 @@ fix/navigator-polyfill-before-routes  # navigator polyfill runs before route mod
 edge/prompt-history  # Composer prompt recall — ArrowUp and Ctrl+R fuzzy search over a per-project daemon store (fork-only, never upstreamed)
 fix/explorer-symlink-entries  # Symlinked directories open, and links the workspace boundary will not follow are shown with a reason rather than dropped (no upstream PR yet)
 fix/workspace-directory-hydration-per-connection  # A reconnect that lands on a new daemon session shows the loading state instead of "Workspace unavailable" (no upstream PR yet)
+feat/agent-handoff  # Hand an agent's work to a new agent on any provider, model, mode or profile, carrying a generated brief (no upstream PR yet)
+fix/mcp-parity-stale-worktree-tools  # MCP parity suite called worktree tools removed in #2186; rewritten against the workspace tools that replaced them, and added to test:integration so it runs in CI (no upstream PR yet)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (#2597, closed upstream, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (#2452, closed upstream, bendavid)
 pr/2396-ssh-lifecycle  # Install, launch and authenticate SSH remote hosts, on upstream's transport (#2396, closed upstream as superseded by #3989, bendavid)
