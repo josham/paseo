@@ -30,6 +30,7 @@ fix/explorer-symlink-entries  # Symlinked directories open, and links the worksp
 fix/workspace-directory-hydration-per-connection  # A reconnect that lands on a new daemon session shows the loading state instead of "Workspace unavailable" (no upstream PR yet)
 feat/agent-handoff  # Hand an agent's work to a new agent on any provider, model, mode or profile, carrying a generated brief (no upstream PR yet)
 fix/mcp-parity-stale-worktree-tools  # MCP parity suite called worktree tools removed in #2186; rewritten against the workspace tools that replaced them, and added to test:integration so it runs in CI (no upstream PR yet)
+fix/android-dictation-mic-route  # Android dictation pointed VOICE_COMMUNICATION capture at output-only Bluetooth profiles and recorded digital silence; the microphone is now pinned separately and a dead route is reported instead of transcribing nothing (no upstream PR yet)
 pr/2597-sidebar-tree  # Expandable agent/terminal tree in the sidebar (#2597, closed upstream, bendavid)
 pr/2452-pdf-preview  # Preview PDFs in the file panel (#2452, closed upstream, bendavid)
 pr/2396-ssh-lifecycle  # Install, launch and authenticate SSH remote hosts, on upstream's transport (#2396, closed upstream as superseded by #3989, bendavid)
