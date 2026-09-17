@@ -1,7 +1,7 @@
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import { execCommand } from "../../utils/spawn.js";
@@ -816,8 +816,36 @@ function resolveDevContainerBinary(): string {
   try {
     const require = createRequire(import.meta.url);
     const cliPath = require.resolve("@devcontainers/cli/devcontainer.js");
+    const unpacked = unpackedAsarPath(cliPath);
+    // Only prefer the unpacked copy when it is really there, so a build without the
+    // asarUnpack entry behaves exactly as before rather than pointing at nothing.
+    if (unpacked !== null && existsSync(unpacked)) return unpacked;
     return cliPath;
   } catch {
     return "devcontainer";
   }
+}
+
+/**
+ * Rewrite a path inside the packaged app's `app.asar` to the unpacked copy beside it.
+ *
+ * `require.resolve` answers with a path under app.asar and Electron's fs shim can read
+ * it, but `child_process.spawn` goes straight to the OS, which rejects that path with
+ * ENOTDIR — the dev container then never starts and the badge sits on "Starting
+ * container". electron-builder unpacks the CLI to app.asar.unpacked (see `asarUnpack`
+ * in packages/desktop/electron-builder.yml); this points spawn at the real file.
+ *
+ * Same failure and the same shape of answer as `unpackedEsbuildBinaryFromPackageDir` in
+ * server/plugins/compiler.ts. Returns null when the path is not inside an asar, which is
+ * every non-packaged run.
+ */
+export function unpackedAsarPath(filePath: string): string | null {
+  const asarSegment = `${sep}app.asar${sep}`;
+  const asarIndex = filePath.indexOf(asarSegment);
+  if (asarIndex === -1) return null;
+  return join(
+    filePath.slice(0, asarIndex),
+    "app.asar.unpacked",
+    filePath.slice(asarIndex + asarSegment.length),
+  );
 }
