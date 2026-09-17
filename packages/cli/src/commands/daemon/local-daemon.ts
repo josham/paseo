@@ -1,4 +1,5 @@
 import { Command, Option } from "commander";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -40,6 +41,62 @@ function resolveDaemonRunnerEntry(): string {
   throw new Error("Unable to resolve @getpaseo/server package root for daemon runner");
 }
 
+/**
+ * Whether `systemd-run --user --scope` is available to wrap the launch.
+ *
+ * A detached daemon has to outlive the session that started it. Under
+ * systemd-logind with `KillUserProcesses=yes` it does not: the daemon inherits
+ * the launching session's cgroup and dies with that session -- an SSH
+ * connection closing, a desktop logout, or just the terminal that ran
+ * `paseo daemon start`. A transient scope of its own survives all three, which
+ * is what lets a daemon installed over SSH stay up after the setup connection
+ * goes; see `@getpaseo/protocol/ssh-lifecycle`.
+ *
+ * Pairs with `loginctl enable-linger`: without linger the user's systemd
+ * instance stops at last logout and takes the scope with it.
+ */
+export function detectSystemdScopeSupport(): boolean {
+  if (process.platform !== "linux") return false;
+  if (!process.env.XDG_RUNTIME_DIR) return false;
+  try {
+    return spawnSync("systemd-run", ["--version"], { timeout: 2000, stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort `loginctl enable-linger`. Polkit may deny it and it may already be
+ * on; neither is fatal, the daemon just goes back to dying with the user's last
+ * session.
+ */
+export function enableSystemdLinger(): void {
+  try {
+    spawnSync("loginctl", ["enable-linger"], { timeout: 2000, stdio: "ignore" });
+  } catch {
+    // Already enabled, or refused. Nothing to do about either.
+  }
+}
+
+/**
+ * The command to actually spawn. Pure, so the wrapping is testable without a
+ * systemd on the machine running the tests.
+ */
+export function resolveDaemonLaunchCommand(input: {
+  execPath: string;
+  args: string[];
+  useSystemdScope: boolean;
+}): { command: string; args: string[] } {
+  if (!input.useSystemdScope) return { command: input.execPath, args: input.args };
+  // --quiet so the scope registration does not land in the daemon's stdio, and
+  // --collect so a scope whose daemon crashed is garbage-collected rather than
+  // left behind in a failed state where the same unit name cannot be reused.
+  return {
+    command: "systemd-run",
+    args: ["--user", "--scope", "--quiet", "--collect", input.execPath, ...input.args],
+  };
+}
+
 export async function launchLocalDaemon(options: {
   home: string;
   timeoutMs?: number;
@@ -51,10 +108,22 @@ export async function launchLocalDaemon(options: {
   process.once("SIGTERM", cancel);
   try {
     const entry = resolveDaemonRunnerEntry();
+    // Foreground is `paseo daemon run`: a deployment the caller supervises, which
+    // wants no scope of its own and no linger.
+    const useSystemdScope = !options.foreground && detectSystemdScopeSupport();
+    if (useSystemdScope) enableSystemdLinger();
+    const launch = resolveDaemonLaunchCommand({
+      execPath: process.execPath,
+      args: [...(entry.endsWith(".ts") ? ["--import", "tsx"] : []), entry],
+      useSystemdScope,
+    });
     return await startDaemonInstance({
       home: resolvePaseoHome({ PASEO_HOME: options.home }),
-      command: process.execPath,
-      args: [...(entry.endsWith(".ts") ? ["--import", "tsx"] : []), entry],
+      command: launch.command,
+      args: launch.args,
+      // systemd-run starts the daemon as its child rather than becoming it, so
+      // the PID this spawns is never the daemon's.
+      launcherSpawnsDaemon: useSystemdScope,
       env: process.env,
       mode: options.foreground ? "deployment" : "managed",
       foreground: options.foreground,

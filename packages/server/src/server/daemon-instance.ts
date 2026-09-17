@@ -205,6 +205,15 @@ export async function startDaemonInstance(input: {
   env: NodeJS.ProcessEnv;
   mode: "managed" | "deployment";
   desktopManaged?: boolean;
+  /**
+   * Set when `command` is a launcher that starts the daemon as a child rather
+   * than becoming it -- `systemd-run --user --scope`, which puts the daemon in a
+   * cgroup that outlives the session. The spawned PID is then never the
+   * daemon's, so it cannot be used to tell our own daemon apart from one that
+   * won a concurrent start; the readiness wait below skips that shortcut and
+   * waits for a listening instance either way.
+   */
+  launcherSpawnsDaemon?: boolean;
   foreground?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -252,7 +261,8 @@ export async function startDaemonInstance(input: {
     while (true) {
       signal?.throwIfAborted();
       const instance = await readDaemonInstance(input.home);
-      if (instance && instance.pid !== child.pid) return { instance, spawned: false };
+      if (instance && !input.launcherSpawnsDaemon && instance.pid !== child.pid)
+        return { instance, spawned: false };
       if (instance && !acquired) {
         acquired = instance;
         onAcquired(instance);
