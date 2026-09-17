@@ -26,6 +26,10 @@ files:
 asarUnpack:
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
+  # The dev container CLI is spawned as a child process, and spawn bypasses Electron's
+  # asar fs shim: left inside the archive the OS rejects it with ENOTDIR and no container
+  # ever starts. See unpackedAsarPath() in server/devcontainer/devcontainer-service.ts.
+  - node_modules/@devcontainers/cli/**/*
 extraResources:
   - from: ../app/dist
     to: app-dist
