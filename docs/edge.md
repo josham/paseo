@@ -38,7 +38,7 @@ git log --first-parent --format=%s edge-v1.1.0 | grep '^edge: merge '
 | Branch                    | What it is                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `main`                    | A mirror of `upstream/main`. Never commit to it.                                                                       |
-| `edge/base`               | Disposable. Force-pushed to `upstream/main` by `scripts/edge/sync-prs.sh`, and used only as a base for the fork's PRs.  |
+| `edge/base`               | Disposable. Force-pushed to `upstream/main` by `scripts/edge/sync-prs.sh`, and used only as a base for the fork's PRs. |
 | `feat/*`, `fix/*`, `bd/*` | Ordinary work, cut from `upstream/main`. These are the branches that become upstream PRs.                              |
 | `pr/<number>-<slug>`      | A re-land of someone else's upstream PR, named for it.                                                                 |
 | `edge/tooling`            | This doc, `scripts/edge/`, and the two `edge-*-release.yml` workflows. The only branch the fork owns.                  |
@@ -104,7 +104,7 @@ merges one.
 ### What goes in the body
 
 **Thin, by default.** Status and gaps: what it is, where it stands upstream, what it is
-stacked on, whether it has a server half, and what was never verified. The *rationale*
+stacked on, whether it has a server half, and what was never verified. The _rationale_
 stays in the commit messages, which are already dense here — every branch is one to three
 commits, each a complete description of one change. A body that restates them is a second
 copy that goes stale the moment the branch is amended, while the commit stays true.
@@ -292,6 +292,78 @@ idle:
 ```bash
 systemctl --user restart paseo-daemon
 ```
+
+## A second install, for testing
+
+The launcher above deliberately shares everything worth sharing: your real projects,
+your real agents, the daemon you work through. That is wrong for trying out a build.
+`install-test-instance.sh` installs a throwaway Edge that shares none of it.
+
+```bash
+scripts/edge/install-test-instance.sh                      # newest release
+scripts/edge/install-test-instance.sh edge-v1.6.1          # a specific one
+scripts/edge/install-test-instance.sh --appimage ./release/Paseo-Edge-x86_64.AppImage
+scripts/edge/install-test-instance.sh --status
+scripts/edge/install-test-instance.sh --remove [--purge]
+```
+
+Four separations, which together are the whole idea:
+
+|              | test instance                        | the install you work in                     |
+| ------------ | ------------------------------------ | ------------------------------------------- |
+| app          | `~/.local/share/paseo-edge-test/app` | `~/Applications/Paseo-Edge-x86_64.AppImage` |
+| userData     | `~/.config/Paseo-Edge-test`          | `~/.config/Paseo-Edge`                      |
+| `PASEO_HOME` | `~/.paseo-edge-test`                 | `~/.paseo`                                  |
+| daemon       | `127.0.0.1:6799`, its own            | `0.0.0.0:6767`, systemd                     |
+
+The launcher sets `PASEO_HOME` and `PASEO_ELECTRON_USER_DATA_DIR`, and the app resolves
+its daemon through `resolvePaseoHome(process.env)` — so a test instance looks for a
+daemon in its own home, finds its own, and has no way to reach yours. Run several at
+once with `--name` and `--port`. `--remove` takes the app and profile; the instance's
+`PASEO_HOME` survives unless you add `--purge`, because that is where anything you were
+testing lives.
+
+The port has to be seeded into the instance's `config.json`, not passed in the
+environment: `daemonLaunchEnvironment()` strips every `DAEMON_SETTING_ENV_KEY` —
+`PASEO_LISTEN` and `PORT` among them — from a managed launch, so that a desktop app
+cannot leak its own environment into the daemon it spawns.
+
+### Which daemon it runs
+
+By default the app runs the daemon it ships with, exactly as a fresh install does: one
+commit on both sides, nothing else to install, and it stops when you quit the app. Point
+`--daemon` elsewhere when the daemon is what you are testing:
+
+```bash
+--daemon edge-v1.6.1                      # that release's bundle, into the instance
+--daemon ./paseo-edge-daemon-1.6.1.tar.gz # a bundle you built
+--daemon ~/workspace/paseo/paseo          # a built checkout, straight from dist/
+```
+
+Any of those seeds the profile with `manageBuiltInDaemon: false` and writes
+`<instance>/bin/paseo-edge-<name>-daemon`, a foreground launcher with the instance's home
+and port already set. Start it before the app; stop it with Ctrl-C. It is deliberately
+not a service — nothing on the machine should depend on a test daemon staying up.
+
+### What the script does that you would otherwise forget
+
+- **Extracts the AppImage** instead of installing it. `electron-updater` only replaces an
+  AppImage when `$APPIMAGE` is set, so extracting is what pins the build under test —
+  otherwise the instance quietly stops being the version you installed. Measured on 1.8.0:
+  the check ends at `APPIMAGE env is not defined` before any network call. The updater
+  feed is also repointed at a channel with no asset, whose 404 is the one updater error
+  Paseo swallows in silence. Costs ~430 MB per instance. `--keep-updates` opts out.
+- **Turns the relay off.** A config that omits `daemon.relay.enabled` gets the opt-in
+  default of `true`, so a test daemon otherwise connects to `relay.paseo.sh` on first
+  start and appears as another device on your account. `--relay` when that is the point.
+- **Leaves the speech models alone.** A fresh `PASEO_HOME` downloads its own copy on
+  first daemon start — 985 MB, measured. `--share-models` symlinks the live install's
+  instead, which is safe enough to offer and too destructive to assume.
+- **Installs no desktop entry** unless you ask with `--desktop-entry`. Every current
+  Paseo build reports the same Wayland `app_id` (`getpaseo-desktop`), so a second entry
+  claiming that `StartupWMClass` makes it ambiguous which entry a window matches — and
+  the cost of that lands on the install you work in, whose windows may take the test
+  instance's icon.
 
 ## Windows
 
