@@ -41,7 +41,6 @@ function resolveDaemonRunnerEntry(): string {
   throw new Error("Unable to resolve @getpaseo/server package root for daemon runner");
 }
 
-
 /**
  * Whether `systemd-run --user --scope` is available to wrap the launch.
  *
