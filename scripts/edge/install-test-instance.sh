@@ -149,7 +149,18 @@ status_report() {
     else
         echo "running  : no"
     fi
-    echo "port     : $port (live daemon: ${live_port:-unknown})"
+    # Read the port the instance actually has, not the --port default: --status takes
+    # no --port, so echoing the variable reported 6799 for an instance seeded on 6801.
+    local configured=""
+    if [[ -f "$paseo_home/config.json" ]]; then
+        configured="$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"[^"]*:\([0-9][0-9]*\)".*/\1/p' \
+            "$paseo_home/config.json" | head -1)"
+    fi
+    if [[ -n "$configured" ]]; then
+        echo "port     : $configured (live daemon: ${live_port:-unknown})"
+    else
+        echo "port     : not seeded yet; an install would use $port (live daemon: ${live_port:-unknown})"
+    fi
 }
 
 if [[ "$action" == "status" ]]; then
