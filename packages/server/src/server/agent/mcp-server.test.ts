@@ -1183,6 +1183,50 @@ describe("terminal MCP tools", () => {
       totalLines: 42,
     });
   });
+
+  it("runs an agent's terminal inside the workspace's container", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const createTerminal = vi
+      .fn()
+      .mockResolvedValue({ id: "term-1", name: "Terminal 1", cwd: "/repo" });
+    const containerExec = { kind: "docker", containerId: "abc123" };
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      terminalManager: createTerminalManagerStub({ createTerminal }),
+      ensureWorkspaceForCreate: async () => "ws-1",
+      resolveLaunchStrategy: async () =>
+        ({ isIsolated: true, serialize: () => containerExec }) as never,
+      logger,
+    });
+
+    await registeredTool(server, "create_terminal").handler({ cwd: "/repo" });
+
+    expect(createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "ws-1", containerExec }),
+    );
+  });
+
+  it("runs a host workspace's terminal on the host", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const createTerminal = vi
+      .fn()
+      .mockResolvedValue({ id: "term-1", name: "Terminal 1", cwd: "/repo" });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      terminalManager: createTerminalManagerStub({ createTerminal }),
+      ensureWorkspaceForCreate: async () => "ws-1",
+      resolveLaunchStrategy: async () => null,
+      logger,
+    });
+
+    await registeredTool(server, "create_terminal").handler({ cwd: "/repo" });
+
+    expect(createTerminal).toHaveBeenCalledWith(expect.objectContaining({ containerExec: null }));
+  });
 });
 
 describe("agent-facing privilege guards", () => {

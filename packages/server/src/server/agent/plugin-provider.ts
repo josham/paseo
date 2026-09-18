@@ -29,6 +29,7 @@ import type {
   AgentFeature,
   AgentLaunchContext,
   AgentMode,
+  ProviderAvailabilityOptions,
   AgentModelDefinition,
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -914,8 +915,8 @@ class PluginAgentClient implements AgentClient {
     };
   }
 
-  async isAvailable(signal?: AbortSignal): Promise<boolean> {
-    signal?.throwIfAborted();
+  async isAvailable(options?: ProviderAvailabilityOptions): Promise<boolean> {
+    options?.signal?.throwIfAborted();
     return await this.runtime.isAvailable();
   }
 

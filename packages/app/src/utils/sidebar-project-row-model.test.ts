@@ -31,6 +31,8 @@ function workspace(overrides: Partial<SidebarWorkspaceEntry> = {}): SidebarWorks
     archiveUnpushedCommitCount: null,
     scripts: [],
     hasRunningScripts: false,
+    containerStatus: undefined,
+    containerInfo: undefined,
     statusEnteredAt: null,
     ...overrides,
     archivingAt: overrides.archivingAt ?? null,

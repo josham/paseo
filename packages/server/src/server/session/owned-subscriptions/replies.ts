@@ -32,6 +32,11 @@ const exceptions = {
   agent_permission_resolved: ["agent_permission_response"],
   terminals_changed: ["subscribe_terminals_request"],
   "daemon.update.progress": ["daemon.update.request"],
+  // Build output for a throwaway probe container, correlated to the probe request
+  // that asked for it. The workspace's own container streams
+  // `container.lifecycle.progress`, which is keyed by workspace and carries no
+  // requestId, so it is not a reply at all and needs no entry here.
+  "container.probe.progress": ["container.probe.request"],
   // Transcription belongs to the explicitly retained voice operation, not a request ID.
   transcription_result: [],
   // This legacy requestId is a producer marker; checkout updates require event demand.
