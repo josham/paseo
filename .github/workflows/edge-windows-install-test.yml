@@ -84,6 +84,16 @@ jobs:
             -c.nsis.include=../../scripts/edge/windows-install-dir.nsh \
             -c.win.artifactName='Paseo-Edge-Setup-${version}-${arch}.${ext}'
 
+      # Keeps the built installer for local work. Reproducing an install bug against the
+      # exact binary CI built beats rebuilding it, and the Windows VM has no toolchain.
+      - name: Upload the built installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-installer-x64
+          path: packages/desktop/release/Paseo-Edge-Setup-*-x64.exe
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Fetch a stock Paseo installer
         shell: pwsh
         env:
