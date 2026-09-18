@@ -493,6 +493,11 @@ export const ar: TranslationResources = {
       },
     },
     fileExplorer: {
+      symlink: {
+        label: "رابط رمزي",
+        outsideWorkspace: "خارج مساحة العمل",
+        broken: "الهدف مفقود",
+      },
       sort: {
         name: "اسم",
         modified: "معدل",
