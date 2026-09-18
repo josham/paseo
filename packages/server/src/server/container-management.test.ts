@@ -1827,6 +1827,91 @@ dockerTest(
 );
 
 dockerTest(
+  "real backend: reclaiming a stack this daemon named takes its network with it",
+  async () => {
+    // `docker rm` leaves the compose network behind, so a workspace-owned stack used
+    // to be reclaimed container by container and keep its subnet forever. The pool is
+    // about 31 wide, and running out fails the *next* container start anywhere on the
+    // host, which is a long way from the toggle that caused it. The same test pins the
+    // boundary that makes this safe to do at all: a shared checkout's network, which
+    // other workspaces still need, must survive.
+    const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-netreclaim-"));
+    const composePath = path.join(cwd, "docker-compose.yml");
+    const ours = `paseo-wks_netreclaim${Date.now()}`;
+    const shared = `sharedkeep${Date.now()}`;
+    writeFileSync(
+      composePath,
+      [
+        "services:",
+        "  app:",
+        "    image: alpine:latest",
+        "    command: sleep infinity",
+        "  db:",
+        "    image: alpine:latest",
+        "    command: sleep infinity",
+        "",
+      ].join("\n"),
+    );
+    const compose = (project: string, ...args: string[]) =>
+      execFileSync("docker", ["compose", "-p", project, "-f", composePath, ...args]);
+    const networksIn = (project: string) =>
+      execFileSync("docker", [
+        "network",
+        "ls",
+        "--filter",
+        `label=com.docker.compose.project=${project}`,
+        "--format",
+        "{{.Name}}",
+      ])
+        .toString()
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+    const containersIn = (project: string) =>
+      execFileSync("docker", [
+        "ps",
+        "-aq",
+        "--filter",
+        `label=com.docker.compose.project=${project}`,
+      ])
+        .toString()
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+
+    const backend = createDevContainerBackend({ logger: createTestLogger() });
+    try {
+      compose(ours, "up", "-d");
+      compose(shared, "up", "-d");
+      expect(containersIn(ours)).toHaveLength(2);
+      expect(networksIn(ours)).toHaveLength(1);
+      expect(networksIn(shared)).toHaveLength(1);
+
+      await backend.stop(
+        { key: "wks_netreclaim", kind: "workspace", workspaceFolder: cwd, composeProject: ours },
+        { remove: true },
+      );
+
+      // Both services gone, and the subnet handed back.
+      expect(containersIn(ours)).toHaveLength(0);
+      expect(networksIn(ours)).toHaveLength(0);
+      // The shared checkout's network is not ours to reclaim.
+      expect(networksIn(shared)).toHaveLength(1);
+    } finally {
+      for (const project of [ours, shared]) {
+        try {
+          compose(project, "down", "-v");
+        } catch {
+          /* best effort */
+        }
+      }
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
+
+dockerTest(
   "real backend: probe containers left by a previous run are reaped, workspace ones are not",
   async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "paseo-devcontainer-real-"));
