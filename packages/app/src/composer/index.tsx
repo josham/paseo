@@ -48,7 +48,6 @@ import {
   type DraftAgentControlsProps,
 } from "@/composer/agent-controls";
 import { ContextWindowMeter } from "@/components/context-window-meter";
-import { KeyboardTranslateView } from "@/components/keyboard-translate-view";
 import { useImageAttachmentPicker } from "@/hooks/use-image-attachment-picker";
 import { selectAgentTurnPresentation, useSessionStore } from "@/stores/session-store";
 import { useFilePicker } from "@/hooks/use-file-picker";
@@ -113,6 +112,13 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { submitAgentInput } from "@/composer/submit";
+import { recordPromptHistory, usePromptHistory } from "@/composer/history/store";
+import { PromptHistoryButton } from "@/composer/history/button";
+import { usePromptHistorySearch } from "@/composer/history/use-prompt-history-search";
+import type { PromptHistoryEntry } from "@getpaseo/protocol/messages";
+import type { PromptHistoryStatus } from "@/composer/history/store";
+import { usePromptRecall } from "@/composer/history/use-prompt-recall";
+import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { useAppSettings } from "@/hooks/use-settings";
@@ -127,14 +133,19 @@ import type {
   WorkspaceFileComposerAttachment,
   WorkspaceComposerAttachment,
 } from "@/attachments/types";
-import type { PickedFile } from "@/attachments/picked-file";
+import type { SelectedFile } from "@/attachments/selected-file";
 import { resolveComposerAttachmentSubmitFormat } from "@/composer/attachments/submit";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
 import { useWorkspaceAttachmentsForScopes } from "@/attachments/workspace-attachments-store";
-import { droppedItemsToPickedFiles } from "@/composer/attachments/drop";
+import { droppedItemsToSelectedFiles } from "@/composer/attachments/drop";
 import { getFileTypeLabel } from "@/attachments/file-types";
 import { Combobox, ComboboxItem, type ComboboxOption } from "@/components/ui/combobox";
-import { AttachmentLabel, AttachmentPill, AttachmentThumbnail } from "@/components/attachment-pill";
+import {
+  AttachmentFrame,
+  AttachmentLabel,
+  AttachmentPill,
+  AttachmentThumbnail,
+} from "@/components/attachment-pill";
 import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attachment-lightbox";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { useIsDictationReady } from "@/hooks/use-is-dictation-ready";
@@ -335,8 +346,14 @@ function renderLeftContent(args: RenderLeftContentArgs): ReactElement | null {
   );
 }
 
+interface PendingFileAttachment {
+  id: number;
+  file: SelectedFile;
+}
+
 interface RenderAttachmentTrayArgs {
   selectedAttachments: ComposerAttachment[];
+  pendingFiles: PendingFileAttachment[];
   isComposerLocked: boolean;
   handleOpenAttachment: (attachment: ComposerAttachment) => void;
   handleRemoveAttachment: (index: number) => void;
@@ -352,12 +369,13 @@ interface RenderAttachmentTrayArgs {
 function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | null {
   const {
     selectedAttachments,
+    pendingFiles,
     isComposerLocked,
     handleOpenAttachment,
     handleRemoveAttachment,
     labels,
   } = args;
-  if (selectedAttachments.length === 0) return null;
+  if (selectedAttachments.length === 0 && pendingFiles.length === 0) return null;
   return (
     <View style={styles.attachmentTray} testID="composer-attachment-tray">
       {selectedAttachments.map((attachment, index) =>
@@ -370,6 +388,15 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
           labels,
         }),
       )}
+      {pendingFiles.map(({ id, file }) => (
+        <AttachmentFrame key={id} testID="composer-pending-file-attachment">
+          <AttachmentLabel
+            icon={pendingFilePillIcon}
+            title={file.fileName}
+            subtitle={getFileTypeLabel(file.fileName) ?? ""}
+          />
+        </AttachmentFrame>
+      ))}
     </View>
   );
 }
@@ -968,8 +995,6 @@ interface ComposerProps {
   agentControls?: DraftAgentControlsProps;
   /** Extra styles merged onto the message input wrapper (e.g. elevated background). */
   inputWrapperStyle?: import("react-native").ViewStyle;
-  /** When true, a parent wrapper owns the keyboard shift, so the composer skips its own. */
-  externalKeyboardShift?: boolean;
   /** Optional panel/container layout breakpoint. Defaults to the screen breakpoint. */
   isCompactLayout?: boolean;
   /**
@@ -985,8 +1010,6 @@ interface ComposerProps {
   /** Overrides the mode's default placeholder, for text only the caller can build. */
   placeholder?: string;
 }
-
-const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 
 const EMPTY_ARRAY: readonly QueuedMessage[] = [];
 const StableMessageInput = memo(MessageInput);
@@ -1052,6 +1075,82 @@ function ComposerAutocompleteBinding({
       errorMessage={autocomplete.errorMessage}
       loadingText={autocomplete.loadingText}
       emptyText={autocomplete.emptyText}
+    />
+  );
+}
+
+interface ComposerPromptHistoryHandle {
+  onKeyPress: (event: ComposerKeyPressEvent) => boolean;
+  open: () => boolean;
+}
+
+/**
+ * Prompt search in its own binding, for the same reason autocomplete has one: the
+ * query is the composer's text, and reading that in the parent would re-render
+ * the whole composer on every keystroke. Only `isOpen` is lifted out, through
+ * onOpenChange — it changes when the list opens or closes, not as you type.
+ */
+function ComposerPromptHistoryBinding({
+  text,
+  entries,
+  status,
+  anchorRef,
+  inputRef,
+  replaceText,
+  focusInput,
+  onOpenChange,
+  ref,
+}: {
+  text: ComposerTextSource;
+  entries: readonly PromptHistoryEntry[];
+  status: PromptHistoryStatus;
+  anchorRef: React.RefObject<View | null>;
+  inputRef: React.RefObject<MessageInputRef | null>;
+  replaceText: (text: string, selection?: { start: number; end: number }) => void;
+  focusInput: () => void;
+  onOpenChange: (isOpen: boolean) => void;
+  ref: React.Ref<ComposerPromptHistoryHandle>;
+}) {
+  const query = useSyncExternalStore(text.subscribe, text.getSnapshot, text.getSnapshot);
+  /**
+   * What Escape restores has to come from the input, not the draft store: on web
+   * typing is published after paint (AfterPaintPublication), so opening search
+   * immediately after typing would capture the text as it was a frame ago — and
+   * restore the composer to that instead of what the user had.
+   */
+  const getLiveQuery = useCallback(
+    () => inputRef.current?.getInputSnapshot().text ?? query,
+    [inputRef, query],
+  );
+  const search = usePromptHistorySearch({
+    enabled: status !== "unsupported",
+    entries,
+    status,
+    query,
+    getQuery: getLiveQuery,
+    replaceText,
+    focusInput,
+  });
+
+  const isOpen = search.isOpen;
+  useEffect(() => {
+    onOpenChange(isOpen);
+  }, [isOpen, onOpenChange]);
+
+  useImperativeHandle(ref, () => ({ onKeyPress: search.onKeyPress, open: search.open }), [
+    search.onKeyPress,
+    search.open,
+  ]);
+
+  return (
+    <ComposerAutocomplete
+      testID="composer-prompt-history-popover"
+      visible={isOpen}
+      anchorRef={anchorRef}
+      options={search.options}
+      selectedIndex={search.selectedIndex}
+      onSelect={search.onSelectOption}
+      emptyText={search.emptyText}
     />
   );
 }
@@ -1259,7 +1358,6 @@ function ComposerContentImpl({
   onAttentionPromptSend,
   agentControls,
   inputWrapperStyle,
-  externalKeyboardShift,
   isCompactLayout: isCompactLayoutOverride,
   inputMode = "chat",
   readOnly = false,
@@ -1362,7 +1460,9 @@ function ComposerContentImpl({
   useEffect(() => () => cursorPublication.cancel(), [cursorPublication]);
   const autocompleteRef = useRef<ComposerAutocompleteHandle>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<PendingFileAttachment[]>([]);
+  const nextPendingFileId = useRef(0);
+  const isUploadingFile = pendingFiles.length > 0;
   const [pendingNativeImagePastes, setPendingNativeImagePastes] = useState(0);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false);
@@ -1497,6 +1597,47 @@ function ComposerContentImpl({
       },
     });
   }, []);
+
+  // Prompt recall is per project, so sibling worktrees of one repo share a list.
+  const promptHistoryProjectKey = useWorkspaceFields(
+    serverId,
+    workspaceId ?? null,
+    (workspace) => workspace.projectId,
+  );
+  const promptHistory = usePromptHistory({
+    serverId,
+    projectKey: promptHistoryProjectKey,
+  });
+  // The search itself lives in ComposerPromptHistoryBinding, which owns the
+  // per-keystroke query; only whether it is open reaches this scope.
+  const promptHistoryRef = useRef<ComposerPromptHistoryHandle | null>(null);
+  const [isPromptHistorySearchOpen, setIsPromptHistorySearchOpen] = useState(false);
+  const setPromptHistorySearchOpen = useCallback((isOpen: boolean) => {
+    setIsPromptHistorySearchOpen(isOpen);
+  }, []);
+  const promptRecall = usePromptRecall({
+    enabled: !isPromptHistorySearchOpen,
+    entries: promptHistory.entries,
+    replaceText: replaceUserInput,
+  });
+
+  const { isActiveComposer: isActiveComposerPane } = useComposerKeyboardScope();
+  const promptHistoryHandlerIdRef = useRef(`${keyboardHandlerIdRef.current}:prompt-history`);
+  const handlePromptHistoryKeyboardAction = useCallback(
+    (action: KeyboardActionDefinition): boolean =>
+      action.id === "message-input.history-search"
+        ? (promptHistoryRef.current?.open() ?? false)
+        : false,
+    [],
+  );
+  useKeyboardActionHandler({
+    handlerId: promptHistoryHandlerIdRef.current,
+    actions: ["message-input.history-search"],
+    enabled: isActiveComposerPane && promptHistory.status !== "unsupported",
+    priority: 200,
+    isActive: () => isActiveComposerPane,
+    handle: handlePromptHistoryKeyboardAction,
+  });
 
   const handleWorkspaceFileDropped = useCallback(
     (payload: WorkspaceFileDragPayload) => {
@@ -1676,11 +1817,25 @@ function ComposerContentImpl({
         result,
         outgoingAttachments,
       });
+      // The daemon records the same prompt when it arrives; this is the local
+      // echo so ArrowUp finds it without waiting for a round trip. A queued
+      // message counts, because the user is done typing it either way.
+      if (result === "submitted" || result === "queued") {
+        recordPromptHistory({
+          serverId,
+          projectKey: promptHistoryProjectKey,
+          text: outgoingMessage,
+        });
+      }
+      promptRecall.reset();
     },
     [
       allowEmptySubmit,
       beginSubmit,
       clearDraft,
+      promptHistoryProjectKey,
+      promptRecall,
+      serverId,
       completeSubmit,
       hasExternalContent,
       isAgentRunning,
@@ -1779,23 +1934,16 @@ function ComposerContentImpl({
     [addImages, t],
   );
 
-  const uploadPickedFiles = useCallback(
-    async (files: PickedFile[]) => {
+  const uploadSelectedFiles = useCallback(
+    async (files: SelectedFile[]) => {
       if (files.length === 0) return;
       if (!client) {
         toastErrorRef.current(t("composer.errors.daemonClientDisconnected"));
         return;
       }
 
-      const oversized = files.find((f) => f.bytes.byteLength > MAX_FILE_SIZE_BYTES);
-      if (oversized) {
-        toastErrorRef.current(
-          t("composer.errors.fileTooLarge", { size: "50MB", fileName: oversized.fileName }),
-        );
-        return;
-      }
-
-      setIsUploadingFile(true);
+      const placeholders = files.map((file) => ({ id: nextPendingFileId.current++, file }));
+      setPendingFiles((pending) => [...pending, ...placeholders]);
       try {
         const uploaded = await uploadFileAttachments({ client, files });
         addFiles(uploaded);
@@ -1805,7 +1953,7 @@ function ComposerContentImpl({
           error instanceof Error ? error.message : t("composer.errors.uploadFailed"),
         );
       } finally {
-        setIsUploadingFile(false);
+        setPendingFiles((pending) => pending.filter((entry) => !placeholders.includes(entry)));
       }
     },
     [addFiles, client, t],
@@ -1819,25 +1967,25 @@ function ComposerContentImpl({
     try {
       const files = await pickFiles();
       if (!files) return;
-      await uploadPickedFiles(files);
+      await uploadSelectedFiles(files);
     } catch (error) {
       console.error("[Composer] Failed to upload file:", error);
       toastErrorRef.current(
         error instanceof Error ? error.message : t("composer.errors.uploadFailed"),
       );
     }
-  }, [client, pickFiles, t, uploadPickedFiles]);
+  }, [client, pickFiles, t, uploadSelectedFiles]);
 
   const handleGenericFilesDropped = useCallback(
     async (items: DroppedItem[]) => {
       try {
-        const files = await droppedItemsToPickedFiles(items);
+        const files = droppedItemsToSelectedFiles(items);
         if (files.length === 0) return;
         if (!client || !isConnected) {
           toastErrorRef.current(t("composer.errors.daemonClientDisconnected"));
           return;
         }
-        await uploadPickedFiles(files);
+        await uploadSelectedFiles(files);
       } catch (error) {
         console.error("[Composer] Failed to upload dropped files:", error);
         toastErrorRef.current(
@@ -1845,7 +1993,7 @@ function ComposerContentImpl({
         );
       }
     },
-    [client, isConnected, t, uploadPickedFiles],
+    [client, isConnected, t, uploadSelectedFiles],
   );
 
   const handleRemoveAttachment = useCallback(
@@ -1983,10 +2131,16 @@ function ComposerContentImpl({
 
   const hasSendableContent = hasText || selectedAttachments.length > 0;
 
-  // Handle keyboard navigation for command autocomplete.
+  // Order matters: history search owns every key while its list is up, the
+  // slash/mention popup owns the arrows while it is up, and prompt recall only
+  // sees an ArrowUp nothing else wanted.
   const handleCommandKeyPress = useCallback(
-    (event: ComposerKeyPressEvent) => autocompleteRef.current?.onKeyPress(event) ?? false,
-    [],
+    (event: ComposerKeyPressEvent) => {
+      if (promptHistoryRef.current?.onKeyPress(event)) return true;
+      if (autocompleteRef.current?.onKeyPress(event)) return true;
+      return promptRecall.onKeyPress(event);
+    },
+    [promptRecall],
   );
 
   const cancelButtonStyle = useMemo(
@@ -2211,6 +2365,28 @@ function ComposerContentImpl({
     [attachments, setSelectedAttachments, setGithubSearchQuery, setIsGithubPickerOpen],
   );
 
+  /**
+   * Ctrl+R is unreachable without a physical keyboard, and React Native's native
+   * key events carry no modifier flags, so touch surfaces get a button instead.
+   * Compact web is included: a phone browser has neither.
+   */
+  const showPromptHistoryButton =
+    (isNative || isCompactLayout) && mode.showAttachments && promptHistory.status !== "unsupported";
+  const handlePromptHistoryPress = useCallback(() => {
+    promptHistoryRef.current?.open();
+  }, []);
+  const afterAttachContent = useMemo(
+    () =>
+      showPromptHistoryButton ? (
+        <PromptHistoryButton
+          onPress={handlePromptHistoryPress}
+          disabled={!isConnected || readOnly}
+          iconSize={buttonIconSize}
+        />
+      ) : null,
+    [buttonIconSize, handlePromptHistoryPress, isConnected, readOnly, showPromptHistoryButton],
+  );
+
   const leftContent = useMemo(
     () =>
       renderLeftContent({
@@ -2298,6 +2474,7 @@ function ComposerContentImpl({
     () =>
       renderAttachmentTray({
         selectedAttachments,
+        pendingFiles,
         isComposerLocked,
         handleOpenAttachment,
         handleRemoveAttachment,
@@ -2311,7 +2488,14 @@ function ComposerContentImpl({
             t("composer.attachments.removeGithub", { kind, number: numberLabel }),
         },
       }),
-    [handleOpenAttachment, handleRemoveAttachment, isComposerLocked, selectedAttachments, t],
+    [
+      handleOpenAttachment,
+      handleRemoveAttachment,
+      isComposerLocked,
+      selectedAttachments,
+      pendingFiles,
+      t,
+    ],
   );
 
   const queueList = useMemo(
@@ -2393,10 +2577,7 @@ function ComposerContentImpl({
         focusMessageInputForKeyboardAction={focusMessageInputForKeyboardAction}
         isMessageInputFocused={isMessageInputFocused}
       />
-      <KeyboardTranslateView
-        style={animatedStaticStyles.container}
-        enabled={!externalKeyboardShift}
-      >
+      <View style={animatedStaticStyles.container}>
         <AttachmentLightbox source={lightboxSource} onClose={handleLightboxClose} />
         {/* Input area */}
         <View style={inputAreaContainerStyle}>
@@ -2405,12 +2586,23 @@ function ComposerContentImpl({
             {sendErrorNode}
 
             <View ref={messageInputContainerRef} style={styles.messageInputContainer}>
+              <ComposerPromptHistoryBinding
+                text={textSource}
+                entries={promptHistory.entries}
+                status={promptHistory.status}
+                anchorRef={messageInputContainerRef}
+                inputRef={messageInputRef}
+                replaceText={replaceUserInput}
+                focusInput={focusInput}
+                onOpenChange={setPromptHistorySearchOpen}
+                ref={promptHistoryRef}
+              />
               <ComposerAutocompleteBinding
                 text={textSource}
                 cursor={cursor}
                 inputRef={messageInputRef}
                 anchorRef={messageInputContainerRef}
-                show={mode.showAutocomplete}
+                show={mode.showAutocomplete && !isPromptHistorySearchOpen}
                 ref={autocompleteRef}
                 configuration={autocompleteConfiguration}
               />
@@ -2448,6 +2640,7 @@ function ComposerContentImpl({
                   autoFocus={messageInputAutoFocus}
                   autoFocusKey={`${serverId}:${agentId}:${autoFocusKey ?? ""}`}
                   disabled={isSubmitLoading}
+                  afterAttachContent={afterAttachContent}
                   leftContent={leftContent}
                   beforeVoiceContent={beforeVoiceContent}
                   rightContent={rightContent}
@@ -2494,7 +2687,7 @@ function ComposerContentImpl({
             </View>
           </View>
         </View>
-      </KeyboardTranslateView>
+      </View>
     </>
   );
 }
@@ -2637,6 +2830,7 @@ const styles = StyleSheet.create((theme: Theme) => ({
   },
 })) as unknown as Record<string, object>;
 
+const ThemedAttachmentSpinner = withUnistyles(LoadingSpinner);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedArrowUp = withUnistyles(ArrowUp);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
@@ -2663,3 +2857,7 @@ const githubIssuePillIcon = (
   <ThemedCircleDot size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
 );
 const filePillIcon = <ThemedFileText size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />;
+
+const pendingFilePillIcon = (
+  <ThemedAttachmentSpinner size={18} uniProps={iconForegroundMutedMapping} />
+);

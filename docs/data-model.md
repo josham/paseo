@@ -64,8 +64,9 @@ $PASEO_HOME/
 │   └── managed-processes/
 │       └── {recordId}.json              # Helper processes owned by Paseo; reconciled on daemon bootstrap
 ├── plugins/
-│   ├── sources.json                      # Git origin, ref, commit, and managed checkout ownership
-│   └── {pluginId}/{version}/checkout/    # Source checkout for one installed Git commit
+│   ├── sources.json                      # Managed kind and Git acquisition remote
+│   └── {pluginId}/{uuid}/                # Git checkout or npm package/lockfile/dependency tree
+├── prompt-history.json                  # Prompts a person sent, per project
 └── push-tokens.json                     # Expo push notification tokens
 ```
 
@@ -254,11 +255,13 @@ snapshot so a mixed edit can apply its live subset and still name the paths that
 
 All fields are optional with sensible defaults.
 
-Git-managed plugins still appear as directory sources in `config.json`. This keeps the plugin
-runtime and protocol config compatible with directory-only clients. `plugins/sources.json` owns the
-Git-specific origin, tracking ref, installed commit, repository subdirectory, and checkout root.
-Paseo writes it atomically. An update creates and validates a new version directory before changing
-the configured directory path; successful activation removes the old version.
+Managed plugins appear as directory sources in `config.json`; it owns the active path and enabled
+state. `plugins/sources.json` is written atomically and stores only managed kind and the Git acquisition
+remote. Installed revision, package/subdirectory identity and ownership root come from retained
+artifacts and the fixed managed layout; [managed source ownership](plugins.md#managed-source-ownership)
+explains their authority. An update prepares a new directory before replacing the active path and
+removing the previous version. Old record fields are accepted at the store boundary and ignored;
+there is no startup migration or persistent update policy.
 
 ### Profile lists
 
@@ -488,7 +491,7 @@ Array of workspace records. A workspace is a specific working directory within a
 | `title`                        | `string \| null`                                             | User-set name override layered over `displayName`. Null means "use `displayName`".                                                                                                            |
 | `branch`                       | `string \| null`                                             | The current Git branch for git-backed workspaces. Separate from `displayName`/`title`; a background branch refresh never rewrites the name.                                                   |
 | `worktreeRoot`                 | `string \| null`                                             | Backing checkout/worktree root. May differ from `cwd` for exact subprojects and remains persisted after the worktree is deleted so restore can reproduce the placement.                       |
-| `baseBranch`                   | `string \| null`                                             | Normalized branch the Paseo worktree was created from; null for directories, local checkouts, and checkout-branch worktrees                                                                   |
+| `baseBranch`                   | `string \| null`                                             | Comparison base retained across archive and restore. Branch-off creation stores the resolved ref; legacy and PR-checkout records hold a bare name. Null means no recorded base.               |
 | `isPaseoOwnedWorktree`         | `boolean`                                                    | Whether Paseo owns and may remove/recreate the backing `worktreeRoot`                                                                                                                         |
 | `mainRepoRoot`                 | `string \| null`                                             | Main repository root for worktree checkouts, independent of both exact `cwd` and backing `worktreeRoot`                                                                                       |
 | `createdAt`                    | `string` (ISO 8601)                                          |                                                                                                                                                                                               |
@@ -546,7 +549,46 @@ Simple set of Expo push notification tokens. Loaded with permissive parsing (fil
 
 ---
 
-## 7. Daemon meta files
+## 7. Prompt History
+
+**Path:** `$PASEO_HOME/prompt-history.json`
+
+```json
+{
+  "version": 1,
+  "projects": {
+    "prj_<16 hex>": [{ "text": "run the parser tests", "at": 1757500000000 }]
+  }
+}
+```
+
+The prompts a person sent, newest first, so the composer can offer shell-style
+recall. Keyed by `projectId`, not workspace: sibling worktrees of one repo are
+one train of thought, and a fresh worktree that starts empty is the case that
+makes recall useless.
+
+Only human prompts are recorded. An agent prompting another agent reaches the
+daemon through the same call, so the session records at the three points where
+the sender is known to be a person — a typed message, a spoken one, and the
+opening prompt of an agent created without a `callerAgentId`.
+
+Re-sending a prompt moves it to the front rather than appending, so recall never
+walks the same text twice. Capped at 200 entries per project and 200 projects
+(least recently used first); a single prompt over 20,000 characters is skipped,
+because a paste that size is not something anyone arrows back to.
+
+Recording is deliberately not awaited: a slow write must never delay the send it
+came from. Reads are served from memory after the first load, and writes are
+chained so two connected clients cannot lose an entry between them.
+
+The app reads one project's list over `prompt.history.list.request` and keeps it
+in memory only, echoing each prompt it sends so recall finds it without a round
+trip. Nothing about the list is persisted client-side; the daemon is the copy
+that survives.
+
+---
+
+## 8. Daemon meta files
 
 These small files are not validated as full Zod schemas but are persisted under `$PASEO_HOME` for daemon identity and runtime coordination.
 

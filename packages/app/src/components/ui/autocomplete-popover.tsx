@@ -22,7 +22,7 @@ import {
   measureFloatingPanelPortalHost,
   useFloatingPanelPortalHostName,
 } from "@/components/ui/floating-panel-portal";
-import { useKeyboardShift } from "@/hooks/keyboard-shift-context";
+import { useKeyboardShift } from "@/keyboard/shift";
 import { SPACING } from "@/styles/theme";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 
@@ -60,6 +60,7 @@ interface AutocompletePopoverProps {
   errorMessage?: string;
   loadingText?: string;
   emptyText?: string;
+  testID?: string;
 }
 
 export function AutocompletePopover({
@@ -72,6 +73,7 @@ export function AutocompletePopover({
   errorMessage,
   loadingText,
   emptyText,
+  testID = "composer-autocomplete-popover",
 }: AutocompletePopoverProps): ReactElement | null {
   "use no memo";
   // React Compiler memoizes effect captures by reading SharedValue.value during render.
@@ -158,10 +160,7 @@ export function AutocompletePopover({
   return (
     <Portal hostName={portalHostName}>
       <View style={styles.overlay} pointerEvents="box-none">
-        <Animated.View
-          testID="composer-autocomplete-popover"
-          style={[baseStyle, keyboardLayoutStyle]}
-        >
+        <Animated.View testID={testID} style={[baseStyle, keyboardLayoutStyle]}>
           <Autocomplete
             options={options}
             selectedIndex={selectedIndex}

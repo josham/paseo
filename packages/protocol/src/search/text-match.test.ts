@@ -54,6 +54,24 @@ describe("scoreMatch", () => {
     expect(scoreMatch("art", "party")).toEqual({ tier: 4, offset: 1 });
   });
 
+  it("does not assemble one query word across whitespace-separated words", () => {
+    for (const separator of [" ", "\t", "\n", "\u00a0"]) {
+      expect(scoreMatch("terminal", `term${separator}inal`)).toBeNull();
+    }
+    expect(
+      scoreMatch("terminal", "Let me diagnose this problem in a diagnose this problem and", {
+        fuzzy: fuzzyPolicyForToken("terminal"),
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps subsequences within a word, including names and later words", () => {
+    expect(scoreMatch("trmnl", "Fix terminal resizing")).toEqual({ tier: 5, offset: 4, spread: 8 });
+    expect(scoreMatch("abc", "AgentBrowserConfig")?.tier).toBe(5);
+    expect(scoreMatch("pasbab", "paseo-babysit")?.tier).toBe(5);
+    expect(scoreMatch("confg", "check configuration")?.offset).toBe(6);
+  });
+
   it("returns null when query is not found", () => {
     expect(scoreMatch("xyz", "feat/pi-direct-sdk")).toBeNull();
   });
@@ -225,7 +243,8 @@ describe("scoreTextFields", () => {
     // Splitting on whitespace is what the opt-out keeps; only the run-together form goes.
     expect(scoreTextFields("lab des", fields, { subsequence: false })).not.toBeNull();
     expect(scoreTextFields("labdes", fields, { subsequence: false })).toBeNull();
-    expect(scoreTextFields("labdes", fields)).not.toBeNull();
+    expect(scoreTextFields("labdes", fields)).toBeNull();
+    expect(scoreTextFields("lbl dsgn", fields)).not.toBeNull();
   });
 });
 
@@ -258,6 +277,10 @@ describe("matchRanges", () => {
     expect(markUp("confg", "configuration")).toBe("[conf]i[g]uration");
   });
 
+  it("highlights only the word selected after an earlier partial subsequence", () => {
+    expect(markUp("confg", "check configuration")).toBe("check [conf]i[g]uration");
+  });
+
   it("marks the whole word a typo resolved to", () => {
     // The characters the user got wrong are not in the text to point at, so
     // the word is the smallest honest thing to mark.
@@ -274,5 +297,39 @@ describe("matchRanges", () => {
 
   it("returns nothing for an empty query", () => {
     expect(matchRanges("", "anything", { tier: 0, offset: 0 })).toEqual([]);
+  });
+});
+
+describe("subsequenceAcrossWords", () => {
+  it("keeps runs inside one word by default", () => {
+    // The guarantee #4945 added: an abbreviation may not stitch separate words
+    // together, so a list that preselects its first row stays safe to Enter on.
+    expect(scoreMatch("labdes", "Label as Design")).toBeNull();
+    expect(scoreMatch("prsrtst", "run the parser tests")).toBeNull();
+  });
+
+  it("lets a run span whitespace when a caller opts in", () => {
+    expect(
+      scoreMatch("prsrtst", "run the parser tests", { subsequenceAcrossWords: true }),
+    ).not.toBeNull();
+    expect(
+      scoreMatch("labdes", "Label as Design", { subsequenceAcrossWords: true }),
+    ).not.toBeNull();
+  });
+
+  it("still requires the characters to appear in order", () => {
+    expect(
+      scoreMatch("tstprsr", "run the parser tests", { subsequenceAcrossWords: true }),
+    ).toBeNull();
+  });
+
+  it("marks the characters it actually walked, across words", () => {
+    const text = "run the parser tests";
+    const score = scoreMatch("prsrtst", text, { subsequenceAcrossWords: true });
+    expect(score).not.toBeNull();
+    const marked = matchRanges("prsrtst", text, score!)
+      .map((range) => text.slice(range.start, range.start + range.length))
+      .join("");
+    expect(marked.replace(/\s/gu, "")).toBe("prsrtst");
   });
 });

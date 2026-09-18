@@ -18,13 +18,21 @@ export interface MatchOptions {
   /** Omit or pass null to match exactly. `fuzzyPolicyForToken` picks a policy. */
   fuzzy?: FuzzyPolicy | null;
   /**
-   * Match characters that appear in order but not adjacently, so `pasbab` finds
-   * `paseo-babysit`. Defaults to on. Turn it off where a near miss has to read as
-   * no match at all: it widens far enough that most typos hit something, and a
-   * list that preselects its first row would then act on that row when the user
-   * presses Enter expecting nothing to happen.
+   * Match characters in order within one whitespace-delimited word, so `pasbab`
+   * finds `paseo-babysit`, but `labdes` cannot join "Label as Design". Defaults to on.
    */
   subsequence?: boolean;
+  /**
+   * Let a subsequence run span whitespace, so `prsrtst` finds "run the parser
+   * tests". Off by default, because confining a run to one word is what stops
+   * `labdes` joining "Label as Design", and every list that preselects its first
+   * row depends on that restraint.
+   *
+   * Turn it on only for a surface the user opened to search on purpose and typed
+   * a deliberate abbreviation into — fzf itself crosses words, and a prompt
+   * recall box is judged against fzf.
+   */
+  subsequenceAcrossWords?: boolean;
 }
 
 /** Exact tiers, best to worst. The fuzzy tier always sorts after all of them. */
@@ -69,11 +77,21 @@ function scoreSubstringMatch(query: string, text: string): MatchScore | null {
   return best;
 }
 
-function scoreSubsequenceMatch(query: string, text: string): MatchScore | null {
+function scoreSubsequenceMatch(
+  query: string,
+  text: string,
+  acrossWords = false,
+): MatchScore | null {
   let queryIndex = 0;
   let firstIndex = -1;
   let lastIndex = -1;
   for (let textIndex = 0; textIndex < text.length && queryIndex < query.length; textIndex += 1) {
+    if (!acrossWords && /\s/u.test(text[textIndex])) {
+      queryIndex = 0;
+      firstIndex = -1;
+      lastIndex = -1;
+      continue;
+    }
     if (text[textIndex] !== query[queryIndex]) continue;
     if (firstIndex === -1) firstIndex = textIndex;
     lastIndex = textIndex;
@@ -203,7 +221,11 @@ export function scoreMatch(
   if (t === q) return { tier: TIER_EXACT, offset: 0 };
 
   const substring = scoreSubstringMatch(q, t);
-  const exact = substring ?? (options.subsequence === false ? null : scoreSubsequenceMatch(q, t));
+  const exact =
+    substring ??
+    (options.subsequence === false
+      ? null
+      : scoreSubsequenceMatch(q, t, options.subsequenceAcrossWords === true));
   if (exact) return exact;
 
   const fuzzy = options.fuzzy;
@@ -286,7 +308,11 @@ export function matchRanges(query: string, text: string, score: MatchScore): Mat
   if (score.tier === TIER_SUBSEQUENCE) {
     const indices: number[] = [];
     let queryIndex = 0;
-    for (let textIndex = 0; textIndex < t.length && queryIndex < q.length; textIndex += 1) {
+    for (
+      let textIndex = score.offset;
+      textIndex < t.length && queryIndex < q.length;
+      textIndex += 1
+    ) {
       if (t[textIndex] !== q[queryIndex]) continue;
       indices.push(textIndex);
       queryIndex += 1;
@@ -322,6 +348,8 @@ export interface TextFieldsOptions {
    * `lab des` still matches "Label as Design", `labdes` no longer does.
    */
   subsequence?: boolean;
+  /** See `MatchOptions.subsequenceAcrossWords`. Applied per token. */
+  subsequenceAcrossWords?: boolean;
 }
 
 export function scoreTextFields(
@@ -337,7 +365,11 @@ export function scoreTextFields(
     const fuzzy = options.typoTolerant ? fuzzyPolicyForToken(token) : null;
     let best: MatchScore | null = null;
     for (const field of fields) {
-      const score = scoreMatch(token, field, { fuzzy, subsequence: options.subsequence });
+      const score = scoreMatch(token, field, {
+        fuzzy,
+        subsequence: options.subsequence,
+        subsequenceAcrossWords: options.subsequenceAcrossWords,
+      });
       if (score && (!best || compareMatchScores(score, best) < 0)) {
         best = score;
       }
