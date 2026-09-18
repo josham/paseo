@@ -82,6 +82,9 @@ export interface WorkspaceHeaderWorkspaceActions {
   hasDevContainerConfig?: boolean;
   onRestartContainer: () => void;
   onRebuildContainer: () => void;
+  /** Absent on a daemon that predates per-workspace container scope. */
+  containerScope?: "project" | "workspace";
+  onToggleContainerScope?: () => void;
 }
 
 function WorkspaceHeaderWorkspaceActionItems({
@@ -93,6 +96,8 @@ function WorkspaceHeaderWorkspaceActionItems({
   hasDevContainerConfig,
   onRestartContainer,
   onRebuildContainer,
+  containerScope,
+  onToggleContainerScope,
   onOpenImportSheet,
   onCopyWorkspacePath,
   onCopyBranchName,
@@ -155,6 +160,20 @@ function WorkspaceHeaderWorkspaceActionItems({
           >
             {t("workspace.header.container.rebuildAction")}
           </DropdownMenuItem>
+          {/* Only where the daemon can act on it: an older one has no scope to
+              set, and a config without compose is one container per workspace
+              already. */}
+          {containerScope && onToggleContainerScope ? (
+            <DropdownMenuItem
+              testID="workspace-header-container-scope"
+              leading={MENU_SETTINGS_ICON}
+              onSelect={onToggleContainerScope}
+            >
+              {containerScope === "workspace"
+                ? t("workspace.header.container.shareAction")
+                : t("workspace.header.container.isolateAction")}
+            </DropdownMenuItem>
+          ) : null}
         </>
       ) : null}
     </>
