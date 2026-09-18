@@ -59,13 +59,21 @@ const MAX_ERROR_CHARS = 300;
 const MAX_NARRATIVE_CHARS = 4_000;
 const MAX_LAST_MESSAGE_CHARS = 800;
 
-const PREAMBLE = `# Handoff brief
+const PREAMBLE_HEAD = `# Handoff brief
 
 You are picking up work already in progress. This brief is the only context you
-have: the previous session's conversation is not available to you.
+have: the previous session's conversation is not available to you.`;
 
-OBSERVED sections are read from git and from the previous agent's tracked state.
-DECLARED sections are the previous agent's own account and are unverified — check
+/**
+ * Every section these two lines describe is conditional, so the lines are too. A
+ * handoff from a clean tree with no task list and no errors carries no OBSERVED
+ * section at all — the common shape when an agent hands off because its context is
+ * running out rather than mid-mess. Explaining a kind of section the reader was
+ * never given just sends them looking for what is missing.
+ */
+const OBSERVED_LEGEND =
+  "OBSERVED sections are read from git and from the previous agent's tracked state.";
+const DECLARED_LEGEND = `DECLARED sections are the previous agent's own account and are unverified — check
 them against the working tree before you rely on them.`;
 
 function truncate(text: string, maxChars: number): string {
@@ -129,7 +137,9 @@ function renderFooter(input: ComposeHandoffBriefInput): string {
 }
 
 export function composeHandoffBrief(input: ComposeHandoffBriefInput): string {
-  const sections: string[] = [PREAMBLE];
+  const sections: string[] = [];
+  let hasObserved = false;
+  let hasDeclared = false;
 
   const objective = input.rootObjective ?? input.facts.objective;
   if (objective) {
@@ -139,6 +149,7 @@ export function composeHandoffBrief(input: ComposeHandoffBriefInput): string {
   const workingTree = input.git ? renderWorkingTree(input.git) : null;
   if (workingTree) {
     sections.push(`## Working tree (OBSERVED)\n\n${workingTree}`);
+    hasObserved = true;
   }
 
   if (input.facts.tasks.length > 0) {
@@ -149,6 +160,7 @@ export function composeHandoffBrief(input: ComposeHandoffBriefInput): string {
       lines.push(`- …and ${input.facts.tasks.length - MAX_TASKS} more tasks`);
     }
     sections.push(`## Task list (OBSERVED)\n\n${lines.join("\n")}`);
+    hasObserved = true;
   }
 
   if (input.facts.recentErrors.length > 0) {
@@ -156,21 +168,29 @@ export function composeHandoffBrief(input: ComposeHandoffBriefInput): string {
       .map((error) => `- ${error.slice(0, MAX_ERROR_CHARS)}`)
       .join("\n");
     sections.push(`## Errors in the previous session (OBSERVED)\n\n${errors}`);
+    hasObserved = true;
   }
 
   if (input.narrative) {
     sections.push(
       `## Notes from the previous agent (DECLARED)\n\n${truncate(input.narrative.text, MAX_NARRATIVE_CHARS)}`,
     );
+    hasDeclared = true;
   }
 
   if (input.facts.lastAssistantMessage) {
     sections.push(
       `## Last message from the previous agent (DECLARED)\n\n${truncate(input.facts.lastAssistantMessage, MAX_LAST_MESSAGE_CHARS)}`,
     );
+    hasDeclared = true;
   }
 
   sections.push(`---\n\n${renderFooter(input)}`);
 
-  return sections.join("\n\n");
+  const legend: string[] = [];
+  if (hasObserved) legend.push(OBSERVED_LEGEND);
+  if (hasDeclared) legend.push(DECLARED_LEGEND);
+  const preamble = legend.length > 0 ? `${PREAMBLE_HEAD}\n\n${legend.join("\n")}` : PREAMBLE_HEAD;
+
+  return [preamble, ...sections].join("\n\n");
 }
