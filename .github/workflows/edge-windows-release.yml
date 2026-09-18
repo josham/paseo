@@ -144,17 +144,23 @@ jobs:
           # e2e/packaged-app-smoke.js hardcode it, and the smoke test is worth keeping.
           #
           # No deb/rpm packageName override here — that exists on the Linux job because
-          # rpmbuild rejects a Name tag containing a space. NSIS is happy with one, and
-          # takes "Paseo Edge" for the install directory, Start Menu entry and uninstall
-          # record. Those, and taskbar grouping, key off appId, which we override — so a
-          # stock Paseo and Edge stay separate on Windows without the desktop-entry
-          # workaround Linux needs.
+          # rpmbuild rejects a Name tag containing a space. NSIS is happy with one.
+          #
+          # Of the three things that name an install, only two follow what we override
+          # here: the Start Menu shortcut takes productName, and the uninstall record is
+          # keyed by appId. The install *directory* does not — electron-builder derives it
+          # from productFilename, which is executableName ("Paseo") whenever that is set.
+          # Left alone, Edge installs over a stock Paseo in %LOCALAPPDATA%\Programs\Paseo.
+          # nsis.include fixes that without renaming the binary; the reasoning is in the
+          # .nsh. The path is relative to electron-builder's projectDir, which is
+          # packages/desktop.
           #
           # arm64 is packaged but not smoke-tested: after-pack.js skips the smoke when the
           # build arch differs from the host's, and the runner is x64. Same as upstream.
           npm run build:desktop -- --publish never --win --x64 --arm64 \
             -c.appId=sh.paseo.desktop.edge \
             -c.productName="Paseo Edge" \
+            -c.nsis.include=../../scripts/edge/windows-install-dir.nsh \
             -c.win.artifactName='Paseo-Edge-Setup-${version}-${arch}.${ext}' \
             -c.publish.owner=josham \
             -c.publish.repo=paseo \

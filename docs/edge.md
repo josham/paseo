@@ -379,11 +379,37 @@ test there, and upstream's `ci.yml` runs the server and desktop test suites on
 `windows-latest`. `.github/workflows/edge-windows-release.yml` mirrors upstream's
 `publish-windows` job with our identity overrides, exactly as the Linux one does.
 
-Coexisting with a stock Paseo is **cleaner here than on Linux**. NSIS keys the install
-directory, Start Menu entry and uninstall record off `appId`, which we override to
-`sh.paseo.desktop.edge`, and Windows groups taskbar buttons by the AppUserModelID derived
-from that same id. So there is no equivalent of the `getpaseo-desktop` app_id collision
-and no launcher workaround to install.
+Coexisting with a stock Paseo takes one fork-side file. The Start Menu entry and the
+uninstall record follow what we override — `productName` and `appId` — and taskbar grouping
+follows the AppUserModelID derived from the id. The install **directory** does not.
+electron-builder takes it from `productFilename`, which is `executableName` whenever that is
+set, and `packages/desktop/electron-builder.yml` pins `executableName: Paseo`. Through
+`edge-v1.9.0` that put Edge in `%LOCALAPPDATA%\Programs\Paseo`, the same directory a stock
+Paseo uses, holding one `Paseo.exe` and one `Uninstall Paseo.exe` between two uninstall
+records: installing either over the other overwrote it, and uninstalling either stranded
+what was left.
+
+Overriding `executableName` would fix the directory by renaming the binary, which
+`packages/desktop/e2e/packaged-app-smoke.js` and `scripts/after-pack.js` both hardcode as
+`Paseo` — a `packages/` edit, which this fork does not make. So
+[`scripts/edge/windows-install-dir.nsh`](../scripts/edge/windows-install-dir.nsh) moves the
+directory and leaves the binary alone, passed as `-c.nsis.include`. It hooks `customInit`,
+which `installer.nsi` inserts after `initMultiUser` has set `$INSTDIR`, so an existing
+install's recorded location and an explicit `/D=` both still win. The `.nsh` carries the
+reasoning.
+
+`.github/workflows/edge-windows-install-test.yml` is what keeps this fixed: it builds a
+branch, installs a stock Paseo, installs Edge over it, and asserts they land in different
+directories with an uninstall record each that survives the other being removed. Run it
+against a branch before tagging.
+
+```bash
+gh workflow run "Edge Windows Install Test" --ref edge/tooling -f ref=edge/main
+```
+
+A hosted runner suits this better than the Windows VM: every run starts with neither build
+installed, which is the state an install test needs and the most tedious one to reproduce by
+hand.
 
 What does carry over: `main.ts` hardcodes the app name via `app.setName`, so both builds
 use `%APPDATA%\Paseo` and share a single-instance lock. Launching Edge while a stock Paseo
