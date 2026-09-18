@@ -144,11 +144,16 @@ jobs:
           # Stock first, then Edge over it -- the order a person actually hits, and the one
           # that produced the overwrite this workflow exists to catch.
           #
-          # The reverse order is deliberately not tested here. Installing stock *after* a
-          # fixed Edge crashes the stock installer on this runner with 0xC0000005, and that
-          # does not reproduce on real Windows 11 -- verified by hand on a VM, where both
-          # orders install cleanly. Asserting it here would gate the fork on a hosted-runner
-          # artifact.
+          # Upstream's stock installer crashes intermittently on this runner with
+          # 0xC0000005, with none of the fork's changes in it, and in any position -- it has
+          # died as the first install on a clean machine. It does not reproduce on real
+          # Windows 11, where both install orders succeed. So a stock failure is treated as
+          # the environment failing to provide the premise, not as a regression, and the
+          # coexistence assertions below skip rather than fail.
+          #
+          # The consequence is worth knowing: when stock dies, this workflow only proves
+          # Edge installs to its own directory. Coexistence itself was verified by hand on a
+          # Windows 11 VM -- see docs/edge.md.
           $stockFailed = $false
           if ($env:STOCK_INSTALLER) {
             $code = Install-Silently $env:STOCK_INSTALLER "stock Paseo" "Paseo"
