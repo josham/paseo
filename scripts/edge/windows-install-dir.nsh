@@ -29,37 +29,46 @@
 # as it left them, and we only rewrite the default it would otherwise have handed to the
 # directory page.
 
+!macro customHeader
+  # FileFunc.nsh is already included by multiUser.nsh, but it defines nothing until its
+  # macros are inserted and electron-builder inserts neither of these. Function definitions
+  # belong at file scope, which is where installer.nsi inserts customHeader.
+  !insertmacro GetParent
+  !insertmacro GetFileName
+!macroend
+
 !macro customInit
   Push $0
   Push $1
-  Push $2
 
-  # An install already recorded here wins, in either hive — the assisted installer offers
-  # both modes. Relocating on upgrade would install beside the running copy rather than
-  # over it, and electron-updater drives exactly this path with /S.
+  # An install already recorded here wins. electron-updater runs this installer over an
+  # existing install, and relocating mid-update would drop a second copy beside the running
+  # one. installer.nsh:104 writes this key, so it is set for anything already installed --
+  # including a pre-fix Edge sitting in the shared directory, which therefore stays put.
+  # Moving one of those takes an uninstall and a reinstall.
   ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
   ${If} $0 == ""
     ReadRegStr $0 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
   ${EndIf}
 
   ${If} $0 == ""
-    # An explicit /D= wins too. initMultiUser applied it last, so it is already in $INSTDIR.
-    !insertmacro GetDParameter $1
-    ${If} $1 == ""
-      # What is left is initMultiUser's own default, "<parent>\${APP_FILENAME}". Swap that
-      # last component rather than rebuilding the path: the parent is not always
-      # %LOCALAPPDATA%\Programs — multiUser.nsh:33 prefers the FOLDERID_UserProgramFiles
-      # known folder when Windows reports one, and that redirection has to survive.
-      StrLen $2 "${APP_FILENAME}"
-      StrCpy $0 $INSTDIR "" -$2
-      ${If} $0 == "${APP_FILENAME}"
-        StrCpy $INSTDIR $INSTDIR -$2
-        StrCpy $INSTDIR "$INSTDIR${PRODUCT_NAME}"
-      ${EndIf}
+    # Otherwise this is initMultiUser's default, "<parent>\${APP_FILENAME}". Swap the last
+    # component and keep the parent it resolved: that is not always %LOCALAPPDATA%\Programs,
+    # because multiUser.nsh:33 prefers the FOLDERID_UserProgramFiles known folder when
+    # Windows reports one, and that redirection has to survive.
+    #
+    # An explicit /D= is not checked for. It lands in $INSTDIR ahead of us and only collides
+    # with this when it names a directory whose last component is exactly "${APP_FILENAME}".
+    # Reading it back needs GetDParameter, whose StdUtils plugin call crashed the installer
+    # here with 0xC0000005 -- and a /D= that specific is not worth a second plugin call in
+    # .onInit.
+    ${GetFileName} $INSTDIR $0
+    ${If} $0 == "${APP_FILENAME}"
+      ${GetParent} $INSTDIR $1
+      StrCpy $INSTDIR "$1\${PRODUCT_NAME}"
     ${EndIf}
   ${EndIf}
 
-  Pop $2
   Pop $1
   Pop $0
 !macroend

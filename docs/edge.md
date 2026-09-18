@@ -394,9 +394,10 @@ Overriding `executableName` would fix the directory by renaming the binary, whic
 `Paseo` — a `packages/` edit, which this fork does not make. So
 [`scripts/edge/windows-install-dir.nsh`](../scripts/edge/windows-install-dir.nsh) moves the
 directory and leaves the binary alone, passed as `-c.nsis.include`. It hooks `customInit`,
-which `installer.nsi` inserts after `initMultiUser` has set `$INSTDIR`, so an existing
-install's recorded location and an explicit `/D=` both still win. The `.nsh` carries the
-reasoning.
+which `installer.nsi` inserts after `initMultiUser` has set `$INSTDIR`, so an install already
+recorded in the registry still wins and an update never relocates. An Edge installed before
+this fix therefore stays in the shared directory; moving one takes an uninstall and a
+reinstall. The `.nsh` carries the reasoning.
 
 `.github/workflows/edge-windows-install-test.yml` is what keeps this fixed: it builds a
 branch, installs a stock Paseo, installs Edge over it, and asserts they land in different
