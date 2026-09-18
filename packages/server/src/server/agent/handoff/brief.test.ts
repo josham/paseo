@@ -126,6 +126,69 @@ Start by confirming the working tree matches this brief, then continue the work.
     );
   });
 
+  test("omits the OBSERVED legend when nothing was observed", () => {
+    const brief = composeHandoffBrief({
+      rootObjective: null,
+      facts: {
+        objective: "Prep a new build",
+        tasks: [],
+        recentErrors: [],
+        lastAssistantMessage: "Handing off now",
+      },
+      git: null,
+      source: { provider: "claude", model: "claude-opus-5" },
+      target: { provider: "claude", model: "claude-opus-5" },
+      narrative: { origin: "outgoing-agent", text: "Upstream is already merged in." },
+      chainDepth: 0,
+    });
+
+    expect(brief).not.toContain("OBSERVED sections are read from git");
+    expect(brief).toContain("DECLARED sections are the previous agent's own account");
+  });
+
+  test("omits the DECLARED legend when the previous agent said nothing", () => {
+    const brief = composeHandoffBrief({
+      rootObjective: null,
+      facts: {
+        objective: "Prep a new build",
+        tasks: [],
+        recentErrors: [],
+        lastAssistantMessage: null,
+      },
+      git: GIT,
+      source: { provider: "claude", model: "claude-opus-5" },
+      target: { provider: "claude", model: "claude-opus-5" },
+      narrative: null,
+      chainDepth: 0,
+    });
+
+    expect(brief).toContain("OBSERVED sections are read from git");
+    expect(brief).not.toContain("DECLARED sections are the previous agent's own account");
+  });
+
+  test("drops the legend entirely when only the objective survives", () => {
+    const brief = composeHandoffBrief({
+      rootObjective: null,
+      facts: {
+        objective: "Prep a new build",
+        tasks: [],
+        recentErrors: [],
+        lastAssistantMessage: null,
+      },
+      git: null,
+      source: { provider: "claude", model: "claude-opus-5" },
+      target: { provider: "claude", model: "claude-opus-5" },
+      narrative: null,
+      chainDepth: 0,
+    });
+
+    expect(brief).not.toContain("OBSERVED");
+    expect(brief).not.toContain("DECLARED");
+    expect(brief).toContain(
+      "have: the previous session's conversation is not available to you.\n\n## Objective",
+    );
+  });
+
   test("prefers the chain root objective over the source agent's first message", () => {
     const brief = composeHandoffBrief({
       rootObjective: "Add retry to the upload client",
