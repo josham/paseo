@@ -1621,6 +1621,10 @@ export const ptBR: TranslationResources = {
     searchPlaceholder: "Buscar modelos...",
     openProviderSettings: "Abrir configurações de {{provider}}",
   },
+  handoff: {
+    starting: "Transferindo para {{provider}}...",
+    startingModel: "Transferindo para {{provider}} ({{model}})...",
+  },
   providerCatalog: {
     title: "Adicionar provedor",
     search: "Buscar provedores",

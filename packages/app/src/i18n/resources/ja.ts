@@ -1607,6 +1607,10 @@ export const ja: TranslationResources = {
     searchPlaceholder: "モデルを検索...",
     openProviderSettings: "{{provider}}の設定を開く",
   },
+  handoff: {
+    starting: "{{provider}} に引き継いでいます...",
+    startingModel: "{{provider}}（{{model}}）に引き継いでいます...",
+  },
   providerCatalog: {
     title: "プロバイダーを追加",
     search: "プロバイダーを検索",

@@ -1884,6 +1884,36 @@ export const AgentForkContextRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+/**
+ * Creates a new agent that continues this one's work from a generated brief.
+ * The provider cannot change on a running agent, so a handoff is the only way to
+ * apply a different provider to work already in progress. `target` fields left
+ * out are inherited from the source agent.
+ */
+export const AgentCreateHandoffRequestMessageSchema = z.object({
+  type: z.literal("agent.create_handoff.request"),
+  agentId: z.string(),
+  target: z
+    .object({
+      provider: AgentProviderSchema.optional(),
+      model: z.string().optional(),
+      modeId: z.string().optional(),
+      thinkingOptionId: z.string().optional(),
+      featureValues: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
+  /**
+   * Whether to ask the source agent to write the brief's notes itself. It sees
+   * reasoning the timeline never recorded, but answering costs it a turn of its
+   * own context. "auto" (the default) asks only when the provider changes, where
+   * the payoff is highest and context pressure is least likely to be the reason
+   * for handing off. Falls back to summarizing the timeline whenever the source
+   * cannot answer.
+   */
+  askSourceAgent: z.enum(["auto", "always", "never"]).optional(),
+  requestId: z.string(),
+});
+
 export const SetAgentModeRequestMessageSchema = z.object({
   type: z.literal("set_agent_mode_request"),
   agentId: z.string(),
@@ -3256,6 +3286,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProviderSubagentTimelineRequestMessageSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
   AgentForkContextRequestMessageSchema,
+  AgentCreateHandoffRequestMessageSchema,
   SetAgentModeRequestMessageSchema,
   SetAgentModelRequestMessageSchema,
   SetAgentThinkingRequestMessageSchema,
@@ -4789,6 +4820,21 @@ export const AgentForkContextResponseMessageSchema = z.object({
     itemCount: z.number().int().nonnegative(),
     boundaryMessageId: z.string().nullable(),
     boundaryCursor: AgentTimelineCursorSchema.nullable().optional(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentCreateHandoffResponseMessageSchema = z.object({
+  type: z.literal("agent.create_handoff.response"),
+  payload: z.object({
+    requestId: z.string(),
+    sourceAgentId: z.string(),
+    /** The successor. Null when the handoff failed. */
+    agentId: z.string().nullable(),
+    /** The agent that started the chain — the successor's objective comes from it. */
+    rootAgentId: z.string().nullable(),
+    /** How many handoffs preceded the successor. */
+    chainDepth: z.number().int().nonnegative().nullable(),
     error: z.string().nullable(),
   }),
 });
@@ -6835,6 +6881,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SetAgentTimelineSubscriptionResponseMessageSchema,
   AgentAttentionRequiredMessageSchema,
   AgentForkContextResponseMessageSchema,
+  AgentCreateHandoffResponseMessageSchema,
   CancelAgentResponseMessageSchema,
   ClearAgentAttentionResponseMessageSchema,
   WorkspaceCreateResponseSchema,
@@ -7055,6 +7102,12 @@ export type AgentTimelineListPromptsResponseMessage = z.infer<
   typeof AgentTimelineListPromptsResponseMessageSchema
 >;
 export type AgentForkContextResponseMessage = z.infer<typeof AgentForkContextResponseMessageSchema>;
+export type AgentCreateHandoffRequestMessage = z.infer<
+  typeof AgentCreateHandoffRequestMessageSchema
+>;
+export type AgentCreateHandoffResponseMessage = z.infer<
+  typeof AgentCreateHandoffResponseMessageSchema
+>;
 export type CancelAgentResponseMessage = z.infer<typeof CancelAgentResponseMessageSchema>;
 export type SendAgentMessageResponseMessage = z.infer<typeof SendAgentMessageResponseMessageSchema>;
 export type SetVoiceModeResponseMessage = z.infer<typeof SetVoiceModeResponseMessageSchema>;

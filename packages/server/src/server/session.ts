@@ -53,6 +53,9 @@ import {
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
+import { resolveAskSource, resolveHandoffNarrative } from "./agent/handoff/narrative.js";
+import { waitForAgentWithTimeout } from "./agent/mcp-shared.js";
+import { planHandoff } from "./agent/handoff/plan.js";
 import {
   sendPromptToAgent,
   waitForAgentRunStartWithTimeout,
@@ -2667,6 +2670,8 @@ export class Session {
       }
       case "agent.fork_context.request":
         return this.handleAgentForkContextRequest(msg);
+      case "agent.create_handoff.request":
+        return this.handleAgentCreateHandoffRequest(msg);
       default:
         return undefined;
     }
@@ -8035,6 +8040,143 @@ export class Session {
         source,
       );
     }
+  }
+
+  /**
+   * Creates a successor agent that continues this one's work from a generated
+   * brief. The source is deliberately left running: the brief is lossy, and the
+   * original is the only way back if it turns out to be thin.
+   */
+  private async handleAgentCreateHandoffRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.create_handoff.request" }>,
+  ): Promise<void> {
+    try {
+      const snapshot = await ensureAgentLoaded(msg.agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const record = await this.agentStorage.get(msg.agentId);
+      const plan = await planHandoff({
+        source: {
+          id: msg.agentId,
+          cwd: snapshot.cwd,
+          labels: record?.labels ?? {},
+          config: snapshot.config,
+        },
+        ...(msg.target ? { target: msg.target } : {}),
+        timeline: this.agentManager.getTimeline(msg.agentId),
+        gitReader: this.workspaceGitService,
+        generateNarrative: (narrativeInput) =>
+          this.generateHandoffNarrativeForCwd(narrativeInput.digest, narrativeInput.cwd, {
+            askSource: resolveAskSource({
+              mode: msg.askSourceAgent,
+              sourceProvider: narrativeInput.sourceProvider,
+              targetProvider: narrativeInput.targetProvider,
+            })
+              ? msg.agentId
+              : null,
+          }),
+      });
+
+      const successor = await this.createSessionAgent({
+        type: "create_agent_request",
+        config: plan.config,
+        ...(snapshot.workspaceId ? { workspaceId: snapshot.workspaceId } : {}),
+        initialPrompt: plan.brief,
+        labels: plan.labels,
+        attachments: undefined,
+        requestId: msg.requestId,
+      });
+
+      this.emit({
+        type: "agent.create_handoff.response",
+        payload: {
+          requestId: msg.requestId,
+          sourceAgentId: msg.agentId,
+          agentId: successor.id,
+          rootAgentId: plan.rootAgentId,
+          chainDepth: plan.chainDepth,
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.sessionLogger.error(
+        { err: error, agentId: msg.agentId },
+        "Failed to handle agent.create_handoff.request",
+      );
+      this.emit({
+        type: "agent.create_handoff.response",
+        payload: {
+          requestId: msg.requestId,
+          sourceAgentId: msg.agentId,
+          agentId: null,
+          rootAgentId: null,
+          chainDepth: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  /**
+   * Runs one turn on the source agent asking it to brief its successor.
+   *
+   * This is a real turn on a live session: it lands in the source's timeline and
+   * spends its context. Only a caller that explicitly asked for it gets here, and
+   * a busy agent is left alone rather than interrupted — an in-flight turn is the
+   * user's work, and a brief is not worth derailing it.
+   */
+  private async askAgentForHandoffNarrative(
+    agentId: string,
+    prompt: string,
+  ): Promise<string | null> {
+    const agent = this.agentManager.getAgent(agentId);
+    if (agent?.lifecycle !== "idle") {
+      return null;
+    }
+
+    await sendPromptToAgent({
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      agentId,
+      prompt,
+      unarchive: false,
+      logger: this.sessionLogger,
+    });
+    const result = await waitForAgentWithTimeout(this.agentManager, agentId, {
+      waitForActive: true,
+    });
+    return result.lastMessage;
+  }
+
+  private async generateHandoffNarrativeForCwd(
+    digest: string,
+    cwd: string,
+    options: { askSource: string | null },
+  ) {
+    const generation = createAgentStructuredTextGeneration({
+      agentManager: this.agentManager,
+      providerSnapshotManager: this.providerSnapshotManager,
+      readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
+      getFocusedSelection: (selectionCwd) => this.getFocusedAgentSelectionForCwd(selectionCwd),
+    });
+    return resolveHandoffNarrative({
+      digest,
+      cwd,
+      logger: this.sessionLogger,
+      askSource: options.askSource
+        ? (prompt) => this.askAgentForHandoffNarrative(options.askSource!, prompt)
+        : null,
+      generate: ({ prompt, schema }) =>
+        generation.generate({
+          cwd,
+          prompt,
+          schema,
+          schemaName: "HandoffNarrative",
+          agentTitle: "Handoff brief generator",
+        }),
+    });
   }
 
   private async handleAgentForkContextRequest(
