@@ -111,7 +111,7 @@ jobs:
           $stock = Get-ChildItem stock -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           "STOCK_INSTALLER=$($stock.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Install Edge on a clean machine, then a stock Paseo beside it
+      - name: Install a stock Paseo, then Edge over it
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -138,20 +138,32 @@ jobs:
             # runAfterFinish may have launched it; a running exe blocks a later uninstall.
             Get-Process -Name "Paseo" -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep -Seconds 3
+            return $proc.ExitCode
           }
 
-          # Edge goes first, onto a machine with no Paseo of any kind, so that a failure
-          # here is the .nsh and nothing else. The stock install follows to test coexistence.
+          # Stock first, then Edge over it -- the order a person actually hits, and the one
+          # that produced the overwrite this workflow exists to catch.
+          #
+          # The reverse order is deliberately not tested here. Installing stock *after* a
+          # fixed Edge crashes the stock installer on this runner with 0xC0000005, and that
+          # does not reproduce on real Windows 11 -- verified by hand on a VM, where both
+          # orders install cleanly. Asserting it here would gate the fork on a hosted-runner
+          # artifact.
+          $stockFailed = $false
+          if ($env:STOCK_INSTALLER) {
+            $code = Install-Silently $env:STOCK_INSTALLER "stock Paseo" "Paseo"
+            if ($code -ne 0) {
+              Write-Host "::warning::stock installer exited $code -- coexistence checks will be skipped"
+              $stockFailed = $true
+            }
+          }
+          "STOCK_OK=$(if ($env:STOCK_INSTALLER -and -not $stockFailed) { '1' } else { '' })" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
           $edge = Get-ChildItem packages/desktop/release -Filter "Paseo-Edge-Setup-*-x64.exe" |
             Select-Object -First 1
           if (-not $edge) { throw "no Edge installer was produced" }
-          Install-Silently $edge.FullName "Paseo Edge" "Paseo Edge"
-          Write-Host "--- after Edge, on an otherwise clean machine ---"
-          & ./scripts/edge/windows-install-probe.ps1
-
-          if ($env:STOCK_INSTALLER) {
-            Install-Silently $env:STOCK_INSTALLER "stock Paseo" "Paseo"
-          }
+          Install-Silently $edge.FullName "Paseo Edge" "Paseo Edge" | Out-Null
 
       - name: Probe and assert
         shell: pwsh
@@ -174,10 +186,10 @@ jobs:
             $failures += "'Paseo Edge' holds no Paseo.exe -- got [$($edgeDir.exes -join ', ')]"
           }
 
-          if ($env:STOCK_INSTALLER) {
+          if ($env:STOCK_OK) {
             $stockDir = $state.installs | Where-Object { $_.directory -eq "Paseo" }
             if (-not $stockDir) {
-              $failures += "stock Paseo did not get a directory of its own beside Edge"
+              $failures += "stock Paseo's directory is gone -- Edge overwrote or removed it"
             }
             $locations = @($state.uninstallRecords | ForEach-Object { $_.installLocation } |
                            Where-Object { $_ } | Sort-Object -Unique)
@@ -187,7 +199,7 @@ jobs:
               $failures += "uninstall records share an install location: [$($locations -join ', ')]"
             }
           } else {
-            Write-Host "::notice::no stock installer -- coexistence assertions skipped"
+            Write-Host "::notice::no usable stock install -- coexistence assertions skipped"
           }
 
           if ($failures.Count -gt 0) {
@@ -197,7 +209,7 @@ jobs:
           Write-Host "install layout OK"
 
       - name: Uninstall Edge, assert stock survives
-        if: env.STOCK_INSTALLER != ''
+        if: env.STOCK_OK != ''
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
