@@ -580,6 +580,62 @@ export function createDevContainerBackend(
         logger.warn({ err: error, identifier }, "Failed to remove dev container");
       }
     }
+    await removeProjectNetworks(ref);
+  }
+
+  /**
+   * Compose creates a network per project, and `docker rm` does not touch it, so
+   * reclaiming a workspace-owned stack container by container leaves its network
+   * behind. Nothing ever collects it and nothing surfaces it, but each one holds a
+   * subnet out of a pool of roughly 31. Exhaust that and the *next* container start
+   * anywhere on the host fails with "all predefined address pools have been fully
+   * subnetted" — an error that points at whatever ran next rather than at the toggle
+   * that leaked.
+   *
+   * Same ownership rule as the containers above, for the same reason: only a project
+   * this daemon named after a workspace key. Compose's own project is shared with
+   * every other workspace on the checkout, and its network has to survive.
+   */
+  async function removeProjectNetworks(ref: ContainerRef): Promise<void> {
+    if (!ref.composeProject) return;
+    let names: string[] = [];
+    try {
+      const result = await execCommand(
+        dockerBin,
+        [
+          "network",
+          "ls",
+          "--filter",
+          `label=${COMPOSE_PROJECT_LABEL}=${ref.composeProject}`,
+          "--format",
+          "{{.Name}}",
+        ],
+        { envMode: "internal", timeout: 10_000 },
+      );
+      names = result.stdout
+        .trim()
+        .split("\n")
+        .map((name) => name.trim())
+        .filter(Boolean);
+    } catch (error) {
+      logger.warn(
+        { err: error, project: ref.composeProject },
+        "Failed to list dev container networks",
+      );
+      return;
+    }
+    for (const name of names) {
+      try {
+        await execCommand(dockerBin, ["network", "rm", name], {
+          envMode: "internal",
+          timeout: 30_000,
+        });
+      } catch (error) {
+        // A network still holding an endpoint is not ours to force; log and move on
+        // rather than failing a teardown that already removed what it owns.
+        logger.warn({ err: error, network: name }, "Failed to remove dev container network");
+      }
+    }
   }
 
   /**
