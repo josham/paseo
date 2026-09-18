@@ -22,6 +22,17 @@ export interface MatchOptions {
    * finds `paseo-babysit`, but `labdes` cannot join "Label as Design". Defaults to on.
    */
   subsequence?: boolean;
+  /**
+   * Let a subsequence run span whitespace, so `prsrtst` finds "run the parser
+   * tests". Off by default, because confining a run to one word is what stops
+   * `labdes` joining "Label as Design", and every list that preselects its first
+   * row depends on that restraint.
+   *
+   * Turn it on only for a surface the user opened to search on purpose and typed
+   * a deliberate abbreviation into — fzf itself crosses words, and a prompt
+   * recall box is judged against fzf.
+   */
+  subsequenceAcrossWords?: boolean;
 }
 
 /** Exact tiers, best to worst. The fuzzy tier always sorts after all of them. */
@@ -66,12 +77,16 @@ function scoreSubstringMatch(query: string, text: string): MatchScore | null {
   return best;
 }
 
-function scoreSubsequenceMatch(query: string, text: string): MatchScore | null {
+function scoreSubsequenceMatch(
+  query: string,
+  text: string,
+  acrossWords = false,
+): MatchScore | null {
   let queryIndex = 0;
   let firstIndex = -1;
   let lastIndex = -1;
   for (let textIndex = 0; textIndex < text.length && queryIndex < query.length; textIndex += 1) {
-    if (/\s/u.test(text[textIndex])) {
+    if (!acrossWords && /\s/u.test(text[textIndex])) {
       queryIndex = 0;
       firstIndex = -1;
       lastIndex = -1;
@@ -206,7 +221,11 @@ export function scoreMatch(
   if (t === q) return { tier: TIER_EXACT, offset: 0 };
 
   const substring = scoreSubstringMatch(q, t);
-  const exact = substring ?? (options.subsequence === false ? null : scoreSubsequenceMatch(q, t));
+  const exact =
+    substring ??
+    (options.subsequence === false
+      ? null
+      : scoreSubsequenceMatch(q, t, options.subsequenceAcrossWords === true));
   if (exact) return exact;
 
   const fuzzy = options.fuzzy;
@@ -329,6 +348,8 @@ export interface TextFieldsOptions {
    * `lab des` still matches "Label as Design", `labdes` no longer does.
    */
   subsequence?: boolean;
+  /** See `MatchOptions.subsequenceAcrossWords`. Applied per token. */
+  subsequenceAcrossWords?: boolean;
 }
 
 export function scoreTextFields(
@@ -344,7 +365,11 @@ export function scoreTextFields(
     const fuzzy = options.typoTolerant ? fuzzyPolicyForToken(token) : null;
     let best: MatchScore | null = null;
     for (const field of fields) {
-      const score = scoreMatch(token, field, { fuzzy, subsequence: options.subsequence });
+      const score = scoreMatch(token, field, {
+        fuzzy,
+        subsequence: options.subsequence,
+        subsequenceAcrossWords: options.subsequenceAcrossWords,
+      });
       if (score && (!best || compareMatchScores(score, best) < 0)) {
         best = score;
       }

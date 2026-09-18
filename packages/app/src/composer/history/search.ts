@@ -60,7 +60,14 @@ function scorePreview(
   const total: MatchScore = { tier: 0, offset: 0, spread: 0 };
   const ranges: MatchRange[] = [];
   for (const token of tokens) {
-    const score = scoreMatch(token, preview, { fuzzy: fuzzyPolicyForToken(token) });
+    // Cross-word runs are opt-in upstream (#4945 confined them to one word so a
+    // preselected row cannot be acted on by accident). This box is the opposite
+    // case: the user opened it to search and typed an abbreviation on purpose,
+    // and it is judged against fzf, which crosses words.
+    const score = scoreMatch(token, preview, {
+      fuzzy: fuzzyPolicyForToken(token),
+      subsequenceAcrossWords: true,
+    });
     if (!score) return null;
     total.tier += score.tier;
     total.offset += score.offset;
