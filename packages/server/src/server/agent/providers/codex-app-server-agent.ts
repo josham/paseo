@@ -24,6 +24,7 @@ import {
   type AgentSessionConfig,
   type SteerActiveTurnOptions,
   type SteerResult,
+  type ProviderAvailabilityOptions,
   type AgentSlashCommand,
   type AgentStreamEvent,
   type AgentTimelineItem,
@@ -40,6 +41,10 @@ import {
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
 import { runProviderRefreshActivity } from "../provider-refresh-deadline.js";
+import {
+  LocalLaunchStrategy,
+  type ProcessLaunchStrategy,
+} from "../../devcontainer/launch-strategy.js";
 import type { Logger } from "pino";
 
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
@@ -60,6 +65,7 @@ import {
 } from "./codex/tool-call-mapper.js";
 import {
   checkProviderLaunchAvailable,
+  isCommandAvailableInContainer,
   createProviderEnv,
   createProviderEnvSpec,
   resolveProviderLaunch,
@@ -71,7 +77,6 @@ import {
   probeExecutable,
 } from "../../../executable-resolution/executable-resolution.js";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
-import { spawnProcess } from "../../../utils/spawn.js";
 import { extractCodexTerminalSessionId, nonEmptyString } from "./tool-call-mapper-utils.js";
 import { buildCodexFeatures, codexModelSupportsFastMode } from "./codex-feature-definitions.js";
 import {
@@ -139,6 +144,8 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
 const TURN_START_TIMEOUT_MS = 90 * 1000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
+/** Host spawning is just the local strategy — no need for a parallel branch. */
+const LOCAL_LAUNCH_STRATEGY = new LocalLaunchStrategy();
 // Codex treats most app-server client names as the model-request originator.
 // This reserved Codex name is non-originating, so requests keep Codex's default
 // CLI identity instead of showing up as Paseo in provider usage logs.
@@ -221,6 +228,7 @@ const CODEX_APP_SERVER_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: true,
   supportsRewindFiles: false,
   supportsRewindBoth: false,
+  supportsIsolatedLaunch: true,
 };
 
 const CODEX_MODES: AgentMode[] = [
@@ -514,11 +522,22 @@ export async function findDefaultCodexBinary(): Promise<string | null> {
   return await findCodexMicrosoftStoreBinary();
 }
 
-async function resolveCodexLaunchPrefix(runtimeSettings?: ProviderRuntimeSettings): Promise<{
+async function resolveCodexLaunchPrefix(
+  runtimeSettings?: ProviderRuntimeSettings,
+  options?: { launchStrategy?: ProcessLaunchStrategy },
+): Promise<{
   command: string;
   args: string[];
 }> {
   const launch = await resolveCodexLaunch(runtimeSettings);
+  const strategy = options?.launchStrategy;
+  if (strategy?.isIsolated) {
+    // Whether the host has codex answers a question about the wrong machine.
+    return {
+      command: await strategy.resolveExecutable(launch.command),
+      args: launch.args,
+    };
+  }
   const availability = await checkCodexLaunchAvailable(launch);
   if (!availability.available) {
     throw new Error(
@@ -7088,9 +7107,11 @@ export class CodexAppServerAgentClient implements AgentClient {
 
   private async spawnAppServer(
     launchEnv?: Record<string, string>,
-    options?: { goalsEnabled?: boolean; agentId?: string },
+    options?: { goalsEnabled?: boolean; agentId?: string; launchStrategy?: ProcessLaunchStrategy },
   ): Promise<ChildProcessWithoutNullStreams> {
-    const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
+    const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings, {
+      launchStrategy: options?.launchStrategy,
+    });
     const args = [...launchPrefix.args, "app-server"];
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
@@ -7104,14 +7125,18 @@ export class CodexAppServerAgentClient implements AgentClient {
       },
       "provider.codex.spawn",
     );
-    const child = spawnProcess(launchPrefix.command, args, {
-      detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: [launchEnv],
-      }),
-    });
+    const child = (options?.launchStrategy ?? LOCAL_LAUNCH_STRATEGY).spawn(
+      launchPrefix.command,
+      args,
+      {
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+        ...createProviderEnvSpec({
+          runtimeSettings: this.runtimeSettings,
+          overlays: [launchEnv],
+        }),
+      },
+    );
     assertChildWithPipes(child);
     return child;
   }
@@ -7136,7 +7161,11 @@ export class CodexAppServerAgentClient implements AgentClient {
       null,
       this.logger,
       () =>
-        this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
+        this.spawnAppServer(launchContext?.env, {
+          goalsEnabled,
+          agentId: launchContext?.agentId,
+          launchStrategy: launchContext?.launchStrategy,
+        }),
       this.sessionDeps(),
       options?.persistSession === false,
       goalsEnabled,
@@ -7167,7 +7196,11 @@ export class CodexAppServerAgentClient implements AgentClient {
       handle,
       this.logger,
       () =>
-        this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
+        this.spawnAppServer(launchContext?.env, {
+          goalsEnabled,
+          agentId: launchContext?.agentId,
+          launchStrategy: launchContext?.launchStrategy,
+        }),
       this.sessionDeps(),
       false,
       goalsEnabled,
@@ -7182,7 +7215,7 @@ export class CodexAppServerAgentClient implements AgentClient {
   async listImportableSessions(
     options?: ListImportableSessionsOptions,
   ): Promise<ImportableProviderSession[]> {
-    const child = await this.spawnAppServer();
+    const child = await this.spawnAppServer(undefined, { launchStrategy: options?.launchStrategy });
     const client =
       this.deps._createCodexClient?.(child, this.logger, () => ({})) ??
       new CodexAppServerClient(child, this.logger);
@@ -7241,11 +7274,12 @@ export class CodexAppServerAgentClient implements AgentClient {
   }
 
   async fetchCatalog(
-    _options: FetchCatalogOptions,
+    options: FetchCatalogOptions,
     context?: ProviderRefreshContext,
   ): Promise<ProviderCatalog> {
+    const launchStrategy = options.scope === "workspace" ? options.launchStrategy : undefined;
     const [models, autoReviewEnabled] = await Promise.all([
-      this.fetchModelsFromAppServer(context),
+      this.fetchModelsFromAppServer(context, launchStrategy),
       runProviderRefreshActivity(context, "version", () =>
         this.resolveAutoReviewEnabled(context?.signal),
       ),
@@ -7267,6 +7301,7 @@ export class CodexAppServerAgentClient implements AgentClient {
 
   private async fetchModelsFromAppServer(
     context?: ProviderRefreshContext,
+    launchStrategy?: ProcessLaunchStrategy,
   ): Promise<AgentModelDefinition[]> {
     // Codex model/list is global to the app server in this flow; cwd/force are intentionally ignored.
     let client: CodexAppServerClient | undefined;
@@ -7281,7 +7316,7 @@ export class CodexAppServerAgentClient implements AgentClient {
 
     try {
       await runProviderRefreshActivity(context, "app-server.start", async () => {
-        const child = await this.spawnAppServer();
+        const child = await this.spawnAppServer(undefined, { launchStrategy });
         client = new CodexAppServerClient(child, this.logger);
         if (context?.signal.aborted) await dispose();
       });
@@ -7318,22 +7353,29 @@ export class CodexAppServerAgentClient implements AgentClient {
     }
   }
 
-  async archiveNativeSession(handle: AgentPersistenceHandle): Promise<void> {
-    await this.updateNativeThreadArchiveState(handle, "archive");
+  async archiveNativeSession(
+    handle: AgentPersistenceHandle,
+    options?: { launchStrategy?: ProcessLaunchStrategy },
+  ): Promise<void> {
+    await this.updateNativeThreadArchiveState(handle, "archive", options?.launchStrategy);
   }
 
-  async unarchiveNativeSession(handle: AgentPersistenceHandle): Promise<void> {
-    await this.updateNativeThreadArchiveState(handle, "restore");
+  async unarchiveNativeSession(
+    handle: AgentPersistenceHandle,
+    options?: { launchStrategy?: ProcessLaunchStrategy },
+  ): Promise<void> {
+    await this.updateNativeThreadArchiveState(handle, "restore", options?.launchStrategy);
   }
 
   private async updateNativeThreadArchiveState(
     handle: AgentPersistenceHandle,
     state: "archive" | "restore",
+    launchStrategy?: ProcessLaunchStrategy,
   ): Promise<void> {
     const threadId = handle.nativeHandle ?? handle.sessionId;
     if (!threadId) return;
 
-    const child = await this.spawnAppServer();
+    const child = await this.spawnAppServer(undefined, { launchStrategy });
     const client = new CodexAppServerClient(child, this.logger);
 
     try {
@@ -7358,8 +7400,17 @@ export class CodexAppServerAgentClient implements AgentClient {
     }
   }
 
-  async isAvailable(): Promise<boolean> {
+  async isAvailable(options?: ProviderAvailabilityOptions): Promise<boolean> {
     const launch = await resolveCodexLaunch(this.runtimeSettings);
+    const strategy = options?.launchStrategy;
+    if (strategy?.isIsolated) {
+      // The host's copy is irrelevant: this session would run in the container.
+      return isCommandAvailableInContainer({
+        strategy,
+        command: launch.command,
+        logger: this.logger,
+      });
+    }
     const availability = await checkCodexLaunchAvailable(launch);
     return availability.available;
   }
