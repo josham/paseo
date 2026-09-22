@@ -80,6 +80,8 @@ import {
 import { ComposerControlLayoutProvider } from "@/composer/agent-controls/layout-context";
 import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
+import { pickDesktopModel, pickSheetModel } from "@/composer/agent-controls/model-pick";
+import { useAgentHandoffControls } from "@/composer/agent-controls/use-handoff-controls";
 import { CompactModelSheet } from "@/composer/agent-controls/model-sheet";
 import {
   useAgentProfileEditor,
@@ -110,6 +112,11 @@ interface ControlledAgentControlsProps {
   selectedModelId?: string;
   onSelectModel?: (modelId: string) => void;
   onSelectProviderAndModel?: (provider: string, modelId: string) => void;
+  /**
+   * Live agents only. A running agent cannot change the process it is, so
+   * choosing another provider's model hands the work to a new agent instead.
+   */
+  onHandoffToProviderAndModel?: (provider: string, modelId: string) => void;
   thinkingOptions?: AgentControlOption[];
   selectedThinkingOptionId?: string;
   onSelectThinkingOption?: (thinkingOptionId: string) => void;
@@ -341,53 +348,6 @@ function makeBadgePressableStyle(
   ];
 }
 
-function pickSheetModel({
-  nextProviderId,
-  modelId,
-  currentProvider,
-  onSelectProviderAndModel,
-  onSelectProvider,
-  onSelectModel,
-}: {
-  nextProviderId: string;
-  modelId: string;
-  currentProvider: string;
-  onSelectProviderAndModel?: (provider: string, modelId: string) => void;
-  onSelectProvider?: (providerId: string) => void;
-  onSelectModel?: (modelId: string) => void;
-}) {
-  if (onSelectProviderAndModel) {
-    onSelectProviderAndModel(nextProviderId, modelId);
-    return;
-  }
-  if (nextProviderId !== currentProvider) {
-    onSelectProvider?.(nextProviderId);
-  }
-  onSelectModel?.(modelId);
-}
-
-function pickDesktopModel({
-  nextProviderId,
-  modelId,
-  currentProvider,
-  onSelectModel,
-  onSelectProviderAndModel,
-}: {
-  nextProviderId: string;
-  modelId: string;
-  currentProvider: string;
-  onSelectModel?: (modelId: string) => void;
-  onSelectProviderAndModel?: (provider: string, modelId: string) => void;
-}) {
-  if (onSelectProviderAndModel) {
-    onSelectProviderAndModel(nextProviderId, modelId);
-    return;
-  }
-  if (nextProviderId === currentProvider) {
-    onSelectModel?.(modelId);
-  }
-}
-
 type AgentControlsSlice = {
   provider: string;
   cwd: string | null;
@@ -480,6 +440,7 @@ function ControlledAgentControls({
   selectedModelId,
   onSelectModel,
   onSelectProviderAndModel,
+  onHandoffToProviderAndModel,
   thinkingOptions,
   selectedThinkingOptionId,
   onSelectThinkingOption,
@@ -677,9 +638,10 @@ function ControlledAgentControls({
         currentProvider: provider,
         onSelectModel,
         onSelectProviderAndModel,
+        onHandoffToProviderAndModel,
       });
     },
-    [onSelectModel, onSelectProviderAndModel, provider],
+    [onHandoffToProviderAndModel, onSelectModel, onSelectProviderAndModel, provider],
   );
 
   const providerPressableStyle = useMemo(
@@ -718,11 +680,18 @@ function ControlledAgentControls({
         modelId,
         currentProvider: provider,
         onSelectProviderAndModel,
+        onHandoffToProviderAndModel,
         onSelectProvider,
         onSelectModel,
       });
     },
-    [onSelectModel, onSelectProvider, onSelectProviderAndModel, provider],
+    [
+      onHandoffToProviderAndModel,
+      onSelectModel,
+      onSelectProvider,
+      onSelectProviderAndModel,
+      provider,
+    ],
   );
 
   if (!hasAnyControl) {
@@ -820,7 +789,7 @@ function ControlledAgentControls({
             modeControl={modeControl}
             glyphSize={layoutContextValue.glyphSize}
             modelSelectorServerId={modelSelectorServerId}
-            canSwitchProvider={Boolean(onSelectProviderAndModel)}
+            canSwitchProvider={Boolean(onSelectProviderAndModel || onHandoffToProviderAndModel)}
           />
         )}
       </View>
@@ -1585,6 +1554,13 @@ export const AgentControls = memo(function AgentControls({
     });
   }, [agentProviderDefinitions, agentProviderModels, snapshotSelectedEntry]);
 
+  const handoff = useAgentHandoffControls({
+    serverId,
+    agentId,
+    snapshotEntries,
+    fallbackProviders: agentModelSelectorProviders,
+  });
+
   const modelSelection = resolveAgentModelSelection({
     models,
     runtimeModelId: agent?.runtimeModelId,
@@ -1632,16 +1608,26 @@ export const AgentControls = memo(function AgentControls({
     [handleSelectModel],
   );
 
-  // A running agent is one provider's process, so only that provider's profiles
-  // can apply to it.
-  const profileProviders = useMemo(() => (agentProvider ? [agentProvider] : []), [agentProvider]);
+  // A running agent is one provider's process, but a profile naming another can
+  // still be honored by handing the work to a new agent, so every provider's
+  // profiles are offered.
+  const profileProviders = useMemo(
+    () => handoff.providers.map((entry) => entry.id),
+    [handoff.providers],
+  );
   const profileModeIds = useMemo(
     () => resolveSnapshotModeIds(snapshotSelectedEntry),
     [snapshotSelectedEntry],
   );
   const profileTarget = useMemo<AgentProfileApplyTarget>(
-    () => ({ kind: "agent", agentId, availableModeIds: profileModeIds }),
-    [agentId, profileModeIds],
+    () => ({
+      kind: "agent",
+      agentId,
+      currentProvider: agentProvider ?? "",
+      availableModeIds: profileModeIds,
+      handoff: handoff.onHandoffProfile,
+    }),
+    [agentId, agentProvider, handoff.onHandoffProfile, profileModeIds],
   );
   const agentProfiles = useAgentProfilePicker({
     serverId,
@@ -1779,10 +1765,11 @@ export const AgentControls = memo(function AgentControls({
       {profileEditor.element}
       <ControlledAgentControls
         provider={agent.provider}
-        modelSelectorProviders={agentModelSelectorProviders}
+        modelSelectorProviders={handoff.providers}
         modelOptions={modelOptions}
         selectedModelId={modelSelection.activeModelId ?? undefined}
         onSelectModel={handleSelectModel}
+        onHandoffToProviderAndModel={handoff.onHandoffToProviderAndModel}
         agentProfiles={agentProfiles}
         onApplyAgentProfile={agentProfiles?.applyProfile}
         onEditAgentProfiles={handleEditAgentProfiles}
@@ -1798,7 +1785,7 @@ export const AgentControls = memo(function AgentControls({
         onRetryModelProvider={handleRetryModelProvider}
         isRetryingModelProvider={snapshotIsRefreshing}
         onDropdownClose={onDropdownClose}
-        disabled={!client}
+        disabled={!client || handoff.isHandingOff}
         modeControl={modeControl}
         modelSelectorServerId={serverId}
         isCompactLayout={isCompactLayout}

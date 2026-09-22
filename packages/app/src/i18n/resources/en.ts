@@ -1616,6 +1616,10 @@ export const en = {
     searchPlaceholder: "Search models...",
     openProviderSettings: "Open {{provider}} settings",
   },
+  handoff: {
+    starting: "Handing off to {{provider}}...",
+    startingModel: "Handing off to {{provider}} ({{model}})...",
+  },
   providerCatalog: {
     title: "Add provider",
     search: "Search providers",

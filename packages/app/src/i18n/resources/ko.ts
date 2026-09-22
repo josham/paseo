@@ -1601,6 +1601,10 @@ export const ko: TranslationResources = {
     searchPlaceholder: "모델 검색...",
     openProviderSettings: "{{provider}} 설정 열기",
   },
+  handoff: {
+    starting: "{{provider}}(으)로 인계하는 중...",
+    startingModel: "{{provider}}({{model}})(으)로 인계하는 중...",
+  },
   providerCatalog: {
     title: "프로바이더 추가",
     search: "프로바이더 검색",

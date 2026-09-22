@@ -425,6 +425,25 @@ function parseAgentStreamStressPrompt(prompt: AgentPromptInput): AgentStreamStre
   };
 }
 
+/**
+ * Answers the handoff brief's narrative request with a deterministic payload
+ * matching HandoffNarrativeSchema, so a handoff e2e can cover the path where a
+ * summarizer is available without waiting on a streaming turn.
+ */
+function parseHandoffNarrativePrompt(
+  prompt: AgentPromptInput,
+): { decisions: string[]; gotchas: string[]; nextStep: string } | null {
+  const text = promptToText(prompt);
+  if (!text.includes("Summarize a coding session so another agent can pick up the work.")) {
+    return null;
+  }
+  return {
+    decisions: ["Mock decision"],
+    gotchas: ["Mock gotcha"],
+    nextStep: "Mock next step",
+  };
+}
+
 function parseStructuredBranchNamePrompt(
   prompt: AgentPromptInput,
 ): { title: string; branch: string } | null {
@@ -832,6 +851,7 @@ export class MockLoadTestAgentSession implements AgentSession {
     const stress = parseAgentStreamStressPrompt(prompt);
     const questionPrompt = parseMockQuestionPrompt(prompt);
     const structuredBranchName = parseStructuredBranchNamePrompt(prompt);
+    const handoffNarrative = parseHandoffNarrativePrompt(prompt);
     const settledAssistantImageMarkdown = parseSettledAssistantImageMarkdown(prompt);
     const steeringReplayShape = parseSteeringReplayShape(prompt);
     const scheduleTurn = () => {
@@ -843,6 +863,8 @@ export class MockLoadTestAgentSession implements AgentSession {
         this.scheduleStreamingAssistantTurn(turn, this.streamingAssistantResponse);
       } else if (this.assistantResponse !== null) {
         this.scheduleSettledAssistantTurn(turn, this.assistantResponse);
+      } else if (handoffNarrative) {
+        this.scheduleSettledAssistantTurn(turn, JSON.stringify(handoffNarrative));
       } else if (structuredBranchName) {
         this.scheduleSettledAssistantTurn(turn, JSON.stringify(structuredBranchName));
       } else if (settledAssistantImageMarkdown) {

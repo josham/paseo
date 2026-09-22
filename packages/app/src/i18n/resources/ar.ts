@@ -1591,6 +1591,10 @@ export const ar: TranslationResources = {
     searchPlaceholder: "نماذج البحث...",
     openProviderSettings: "افتح إعدادات{{provider}}",
   },
+  handoff: {
+    starting: "جارٍ التسليم إلى {{provider}}...",
+    startingModel: "جارٍ التسليم إلى {{provider}} ({{model}})...",
+  },
   providerCatalog: {
     title: "إضافة مزود",
     search: "مقدمي البحث",

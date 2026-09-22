@@ -1637,6 +1637,10 @@ export const es: TranslationResources = {
     searchPlaceholder: "Buscar modelos...",
     openProviderSettings: "Abrir configuración de{{provider}}",
   },
+  handoff: {
+    starting: "Transfiriendo a {{provider}}...",
+    startingModel: "Transfiriendo a {{provider}} ({{model}})...",
+  },
   providerCatalog: {
     title: "Agregar proveedor",
     search: "Proveedores de búsqueda",
