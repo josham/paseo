@@ -196,15 +196,44 @@ jobs:
             if (-not $stockDir) {
               $failures += "stock Paseo's directory is gone -- Edge overwrote or removed it"
             }
-            $locations = @($state.uninstallRecords | ForEach-Object { $_.installLocation } |
-                           Where-Object { $_ } | Sort-Object -Unique)
+            # NSIS writes no InstallLocation for either build, so fall back to the directory
+            # the uninstaller itself sits in. The earlier version read installLocation alone
+            # and dropped the nulls, which left an empty set and tripped the "share a
+            # location" branch -- reporting a collision that was not there, and unable to
+            # catch a real one. An unresolvable record is its own failure, never a shared one.
+            $located = @($state.uninstallRecords | ForEach-Object {
+              if ($_.installLocation) {
+                $_.installLocation.TrimEnd('\')
+              } elseif ($_.uninstallString) {
+                $raw = $_.uninstallString.Trim()
+                $close = if ($raw.StartsWith('"')) { $raw.IndexOf('"', 1) } else { -1 }
+                $exe = if ($close -gt 1) {
+                  # "C:\...\Uninstall Paseo.exe" /currentuser -- the path itself holds spaces.
+                  $raw.Substring(1, $close - 1)
+                } elseif ($raw.StartsWith('"')) {
+                  $null
+                } else {
+                  ($raw -split ' /')[0].Trim()
+                }
+                if ($exe) { (Split-Path -Parent $exe).TrimEnd('\') } else { $null }
+              } else {
+                $null
+              }
+            })
+            $unresolved = @($located | Where-Object { -not $_ }).Count
+            $locations = @($located | Where-Object { $_ } | Sort-Object -Unique)
             if ($state.uninstallRecords.Count -lt 2) {
               $failures += "expected an uninstall record per build, got $($state.uninstallRecords.Count)"
+            } elseif ($unresolved -gt 0) {
+              $failures += "could not place $unresolved uninstall record(s): no InstallLocation and no parseable uninstallString"
             } elseif ($locations.Count -lt 2) {
               $failures += "uninstall records share an install location: [$($locations -join ', ')]"
             }
           } else {
-            Write-Host "::notice::no usable stock install -- coexistence assertions skipped"
+            # A warning, not a notice: every green run before 2026-09-22 took this branch
+            # because the stock installer crashed on the runner, so the coexistence
+            # assertions had never once executed and the job still reported success.
+            Write-Host "::warning::no usable stock install -- coexistence assertions SKIPPED, this run did not test coexistence"
           }
 
           if ($failures.Count -gt 0) {
