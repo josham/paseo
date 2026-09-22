@@ -57,10 +57,38 @@ if (Test-Path $uninstallKey) {
     ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
     Where-Object { $_.DisplayName -like "Paseo*" } |
     ForEach-Object {
+      # UninstallString is the quoted uninstaller path *plus* NSIS's /currentuser, e.g.
+      #   "C:\...\Programs\Paseo Edge\Uninstall Paseo.exe" /currentuser
+      # so it is neither a runnable path nor one a .Trim('"') recovers -- the trailing
+      # character is the argument, not a quote. Both callers need the path and the
+      # directory, and both got this wrong on their own, so resolve it once here.
+      # InstallLocation is empty for these builds, which is why the directory falls back
+      # to where the uninstaller sits.
+      $raw = $_.UninstallString
+      $exe = $null
+      if ($raw) {
+        $trimmed = $raw.Trim()
+        if ($trimmed.StartsWith('"')) {
+          $close = $trimmed.IndexOf('"', 1)
+          if ($close -gt 1) { $exe = $trimmed.Substring(1, $close - 1) }
+        } else {
+          $exe = ($trimmed -split ' /')[0].Trim()
+        }
+      }
+      $directory = if ($_.InstallLocation) {
+        $_.InstallLocation.TrimEnd('\')
+      } elseif ($exe) {
+        (Split-Path -Parent $exe).TrimEnd('\')
+      } else {
+        $null
+      }
+
       [pscustomobject]@{
-        displayName     = $_.DisplayName
-        installLocation = $_.InstallLocation
-        uninstallString = $_.UninstallString
+        displayName      = $_.DisplayName
+        installLocation  = $_.InstallLocation
+        uninstallString  = $_.UninstallString
+        uninstallExe     = $exe
+        installDirectory = $directory
       }
     })
 }

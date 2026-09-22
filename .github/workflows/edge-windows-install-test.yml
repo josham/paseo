@@ -196,30 +196,13 @@ jobs:
             if (-not $stockDir) {
               $failures += "stock Paseo's directory is gone -- Edge overwrote or removed it"
             }
-            # NSIS writes no InstallLocation for either build, so fall back to the directory
-            # the uninstaller itself sits in. The earlier version read installLocation alone
-            # and dropped the nulls, which left an empty set and tripped the "share a
-            # location" branch -- reporting a collision that was not there, and unable to
-            # catch a real one. An unresolvable record is its own failure, never a shared one.
-            $located = @($state.uninstallRecords | ForEach-Object {
-              if ($_.installLocation) {
-                $_.installLocation.TrimEnd('\')
-              } elseif ($_.uninstallString) {
-                $raw = $_.uninstallString.Trim()
-                $close = if ($raw.StartsWith('"')) { $raw.IndexOf('"', 1) } else { -1 }
-                $exe = if ($close -gt 1) {
-                  # "C:\...\Uninstall Paseo.exe" /currentuser -- the path itself holds spaces.
-                  $raw.Substring(1, $close - 1)
-                } elseif ($raw.StartsWith('"')) {
-                  $null
-                } else {
-                  ($raw -split ' /')[0].Trim()
-                }
-                if ($exe) { (Split-Path -Parent $exe).TrimEnd('\') } else { $null }
-              } else {
-                $null
-              }
-            })
+            # installDirectory comes from the probe, which falls back to where the
+            # uninstaller sits because NSIS writes no InstallLocation for either build.
+            # Reading installLocation directly and dropping the nulls -- what this did
+            # before -- left an empty set and tripped the "share a location" branch,
+            # reporting a collision that was not there and unable to catch a real one.
+            # An unresolvable record is its own failure, never a shared one.
+            $located = @($state.uninstallRecords | ForEach-Object { $_.installDirectory })
             $unresolved = @($located | Where-Object { -not $_ }).Count
             $locations = @($located | Where-Object { $_ } | Sort-Object -Unique)
             if ($state.uninstallRecords.Count -lt 2) {
@@ -253,8 +236,11 @@ jobs:
           if (-not $edge) { throw "no Edge uninstall record to run" }
           $userDataBefore = $probe.sharedUserData.exists
 
-          # UninstallString is the quoted path to "Uninstall Paseo.exe" in the install dir.
-          $exe = $edge.uninstallString.Trim('"')
+          # Not uninstallString: that carries NSIS's trailing /currentuser, and a
+          # .Trim('"') leaves "...\Uninstall Paseo.exe" /currentuser -- which Start-Process
+          # reports only as "the system cannot find the file specified".
+          $exe = $edge.uninstallExe
+          if (-not $exe) { throw "no uninstaller path in $($edge.uninstallString)" }
           Start-Process -FilePath $exe -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 10
 
