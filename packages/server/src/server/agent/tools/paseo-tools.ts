@@ -34,6 +34,7 @@ import {
 import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
+import { isReservedAgentLabel } from "@getpaseo/protocol/agent-labels";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
 import { expandUserPath, isSameOrDescendantPath, resolvePathFromBase } from "../../path-utils.js";
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
@@ -502,6 +503,24 @@ function resolveChildAgentCwd(params: {
   return resolvePathFromBase(params.parentCwd, requestedCwd);
 }
 
+/**
+ * Labels under the `paseo.` prefix are daemon-managed control state — parentage
+ * and open-tab tracking. `update_agent` may not write them: parentage is trusted
+ * by cascade archival and by the finish notifications, so an agent that could set
+ * it could adopt any agent and rewrite the relationships the daemon reasons about.
+ *
+ * Creation is deliberately not guarded here. `resolveCreateAgentIntent` applies
+ * the parent label after the caller's own, and strips it outright on the legacy
+ * detached path, so a spoofed value there is already neutralised by design.
+ * Operator surfaces are unaffected either way.
+ */
+function assertNoReservedLabels(labels: Record<string, string> | undefined): void {
+  const reserved = Object.keys(labels ?? {}).filter(isReservedAgentLabel);
+  if (reserved.length > 0) {
+    throw new Error(`Labels are reserved and cannot be set: ${reserved.join(", ")}`);
+  }
+}
+
 const TerminalSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -673,6 +692,34 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
     return expandUserPath(trimmedCwd);
   };
+
+  /**
+   * An agent may not put any agent — itself included — into a mode that runs
+   * without permission prompts unless it already runs that way. The provider
+   * manifest marks those modes `isUnattended` (`bypassPermissions`,
+   * `full-access`, `allow-all`, `full`), and an attended agent reaching one is
+   * a privilege escalation: it turns a session a human is adjudicating into one
+   * that acts unprompted. Operator surfaces are unaffected — this binds only a
+   * caller that is itself an agent.
+   */
+  function assertMayGrantMode(agentId: string, modeId: string | undefined): void {
+    if (!callerAgentId || !modeId) {
+      return;
+    }
+    const target = agentManager.getAgent(agentId);
+    if (!target || !providerSnapshotManager.isUnattendedModeForAgent(target, modeId)) {
+      return;
+    }
+    const caller = resolveCallerAgent();
+    const callerRunsUnattended = caller
+      ? providerSnapshotManager.isUnattendedModeForAgent(caller, caller.currentModeId)
+      : false;
+    if (!callerRunsUnattended) {
+      throw new Error(
+        `Mode '${modeId}' runs without permission prompts and cannot be granted by an agent that does not already run that way.`,
+      );
+    }
+  }
 
   async function resolveTerminalWorkspaceId(resolvedCwd: string): Promise<string> {
     // An agent-spawned terminal belongs to the caller agent's workspace. Only if
@@ -2156,6 +2203,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, name, labels, settings }) => {
+      assertNoReservedLabels(labels);
+      assertMayGrantMode(agentId, settings?.modeId);
       if (settings?.modeId !== undefined) {
         await agentManager.setAgentMode(agentId, settings.modeId);
       }
@@ -3087,6 +3136,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, modeId }) => {
+      assertMayGrantMode(agentId, modeId);
       const result = await setAgentModeCommand({ agentManager }, { agentId, modeId });
       return {
         content: [],
