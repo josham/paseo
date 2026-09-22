@@ -1,0 +1,256 @@
+# Does a Paseo Edge install land in a directory of its own, and can it coexist with a
+# stock Paseo?
+#
+# This exists because for six releases it could not: electron-builder takes the NSIS
+# install directory from productFilename — executableName, not productName — so Edge
+# installed over a stock Paseo in %LOCALAPPDATA%\Programs\Paseo, sharing one Paseo.exe and
+# one "Uninstall Paseo.exe" between two uninstall records. scripts/edge/windows-install-dir.nsh
+# fixes it; this is what keeps it fixed.
+#
+# A hosted runner is the right place for this even though a Windows VM exists: every run
+# starts from a machine with no Paseo of either kind on it, which is exactly the state an
+# install test wants and the most tedious one to keep reproducing by hand.
+#
+# Builds x64 NSIS only and never publishes — this is a check, not a release. It is not
+# wired into edge-windows-release.yml because a release should not wait ~20 minutes to
+# rebuild what it already built; run this against a branch before tagging.
+
+name: Edge Windows Install Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build and test"
+        required: false
+        default: edge/main
+        type: string
+
+concurrency:
+  group: edge-windows-install-test-${{ github.event.inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  # Deliberately not a plausible release number: this build must never be mistaken for one
+  # if it escapes the runner.
+  TEST_VERSION: "9.9.9"
+  DESKTOP_PACKAGE_PATH: "packages/desktop"
+
+jobs:
+  install-test:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Set desktop package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const p = process.env.DESKTOP_PACKAGE_PATH + "/package.json";
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            j.version = process.env.TEST_VERSION;
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+          '
+
+      - name: Build the Edge installer
+        shell: bash
+        env:
+          EP_GH_IGNORE_TIME: true
+        run: |
+          set -euo pipefail
+          # Same identity overrides as edge-windows-release.yml, minus arm64, the zip
+          # target and the packaged smoke test — none of which the install path depends on.
+          # Keep -c.nsis.include in step with that workflow.
+          npm run build:desktop -- --publish never --win --x64 \
+            -c.win.target=nsis \
+            -c.appId=sh.paseo.desktop.edge \
+            -c.productName="Paseo Edge" \
+            -c.nsis.include=../../scripts/edge/windows-install-dir.nsh \
+            -c.win.artifactName='Paseo-Edge-Setup-${version}-${arch}.${ext}'
+
+      # Keeps the built installer for local work. Reproducing an install bug against the
+      # exact binary CI built beats rebuilding it, and the Windows VM has no toolchain.
+      - name: Upload the built installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-installer-x64
+          path: packages/desktop/release/Paseo-Edge-Setup-*-x64.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fetch a stock Paseo installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The other half of the collision. Best-effort: if upstream has no Windows asset
+          # on its latest release, the Edge assertions below still run and the coexistence
+          # ones report why they were skipped, rather than failing on a missing premise.
+          New-Item -ItemType Directory -Force -Path stock | Out-Null
+          try {
+            gh release download --repo getpaseo/paseo --pattern 'Paseo-Setup-*-x64.exe' --dir stock
+          } catch {
+            Write-Host "::notice::no stock Paseo x64 installer on getpaseo/paseo's latest release"
+          }
+          $stock = Get-ChildItem stock -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          "STOCK_INSTALLER=$($stock.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install a stock Paseo, then Edge over it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Install-Silently($path, $label, $expectDir) {
+            Write-Host "installing $label -- $path"
+            # -PassThru for the exit code: an NSIS installer that quits in .onInit returns
+            # in a couple of seconds having done nothing, and without this that is
+            # indistinguishable from a fast success.
+            $proc = Start-Process -FilePath $path -ArgumentList "/S" -PassThru -Wait
+            Write-Host "$label installer exited $($proc.ExitCode)"
+
+            # Wait for this install's own directory. Waiting for "Paseo*" would be
+            # satisfied by whichever build is already on the machine.
+            $target = Join-Path (Join-Path $env:LOCALAPPDATA "Programs") $expectDir
+            for ($i = 0; $i -lt 45; $i++) {
+              if (Test-Path $target) { break }
+              Start-Sleep -Seconds 2
+            }
+            if (-not (Test-Path $target)) {
+              Write-Host "::warning::$label did not produce $target"
+            }
+
+            # runAfterFinish may have launched it; a running exe blocks a later uninstall.
+            Get-Process -Name "Paseo" -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 3
+            return $proc.ExitCode
+          }
+
+          # Stock first, then Edge over it -- the order a person actually hits, and the one
+          # that produced the overwrite this workflow exists to catch.
+          #
+          # Upstream's stock installer crashes intermittently on this runner with
+          # 0xC0000005, with none of the fork's changes in it, and in any position -- it has
+          # died as the first install on a clean machine. It does not reproduce on real
+          # Windows 11, where both install orders succeed. So a stock failure is treated as
+          # the environment failing to provide the premise, not as a regression, and the
+          # coexistence assertions below skip rather than fail.
+          #
+          # The consequence is worth knowing: when stock dies, this workflow only proves
+          # Edge installs to its own directory. Coexistence itself was verified by hand on a
+          # Windows 11 VM -- see docs/edge.md.
+          $stockFailed = $false
+          if ($env:STOCK_INSTALLER) {
+            $code = Install-Silently $env:STOCK_INSTALLER "stock Paseo" "Paseo"
+            if ($code -ne 0) {
+              Write-Host "::warning::stock installer exited $code -- coexistence checks will be skipped"
+              $stockFailed = $true
+            }
+          }
+          "STOCK_OK=$(if ($env:STOCK_INSTALLER -and -not $stockFailed) { '1' } else { '' })" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $edge = Get-ChildItem packages/desktop/release -Filter "Paseo-Edge-Setup-*-x64.exe" |
+            Select-Object -First 1
+          if (-not $edge) { throw "no Edge installer was produced" }
+          Install-Silently $edge.FullName "Paseo Edge" "Paseo Edge" | Out-Null
+
+      - name: Probe and assert
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $probe = & ./scripts/edge/windows-install-probe.ps1
+          Write-Host "--- final state ---"
+          Write-Host $probe
+          $state = $probe | ConvertFrom-Json
+
+          $failures = @()
+
+          $edgeDir = $state.installs | Where-Object { $_.directory -eq "Paseo Edge" }
+          if (-not $edgeDir) {
+            $found = ($state.installs | ForEach-Object { $_.directory }) -join ", "
+            $failures += "Edge did not install to 'Paseo Edge'. Directories present: [$found]"
+          } elseif ($edgeDir.exes -notcontains "Paseo.exe") {
+            # The binary is meant to keep upstream's name; only the directory moves.
+            $failures += "'Paseo Edge' holds no Paseo.exe -- got [$($edgeDir.exes -join ', ')]"
+          }
+
+          if ($env:STOCK_OK) {
+            $stockDir = $state.installs | Where-Object { $_.directory -eq "Paseo" }
+            if (-not $stockDir) {
+              $failures += "stock Paseo's directory is gone -- Edge overwrote or removed it"
+            }
+            $locations = @($state.uninstallRecords | ForEach-Object { $_.installLocation } |
+                           Where-Object { $_ } | Sort-Object -Unique)
+            if ($state.uninstallRecords.Count -lt 2) {
+              $failures += "expected an uninstall record per build, got $($state.uninstallRecords.Count)"
+            } elseif ($locations.Count -lt 2) {
+              $failures += "uninstall records share an install location: [$($locations -join ', ')]"
+            }
+          } else {
+            Write-Host "::notice::no usable stock install -- coexistence assertions skipped"
+          }
+
+          if ($failures.Count -gt 0) {
+            $failures | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Write-Host "install layout OK"
+
+      - name: Uninstall Edge, assert stock survives
+        if: env.STOCK_OK != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $probe = (& ./scripts/edge/windows-install-probe.ps1) | ConvertFrom-Json
+          $edge = $probe.uninstallRecords | Where-Object { $_.displayName -like "*Edge*" } | Select-Object -First 1
+          if (-not $edge) { throw "no Edge uninstall record to run" }
+          $userDataBefore = $probe.sharedUserData.exists
+
+          # UninstallString is the quoted path to "Uninstall Paseo.exe" in the install dir.
+          $exe = $edge.uninstallString.Trim('"')
+          Start-Process -FilePath $exe -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 10
+
+          $after = (& ./scripts/edge/windows-install-probe.ps1)
+          Write-Host "--- after uninstalling Edge ---"
+          Write-Host $after
+          $state = $after | ConvertFrom-Json
+
+          $stock = $state.installs | Where-Object { $_.directory -eq "Paseo" }
+          if (-not $stock) {
+            Write-Host "::error::uninstalling Edge removed the stock Paseo install directory"
+            exit 1
+          }
+          if ($stock.exes -notcontains "Paseo.exe") {
+            Write-Host "::error::stock Paseo.exe is gone after uninstalling Edge"
+            exit 1
+          }
+
+          # Separate, unfixed, and not what this workflow gates: uninstaller.nsh deletes
+          # "$APPDATA\${APP_FILENAME}", which is %APPDATA%\Paseo for both builds because
+          # main.ts hardcodes app.setName. So uninstalling Edge can take a stock Paseo's
+          # agents and settings with it. Fixing that means renaming the userData directory
+          # in packages/, so it is reported rather than asserted.
+          if ($userDataBefore -and -not $state.sharedUserData.exists) {
+            Write-Host "::warning::uninstalling Edge removed the shared $($state.sharedUserData.path)"
+          }
+
+          Write-Host "stock Paseo survived Edge's uninstall"
