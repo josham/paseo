@@ -1117,6 +1117,57 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
+  it("reports the workspace directory as unhydrated until the reconnect refresh lands", async () => {
+    const serverId = "workspace-hydration-reconnect";
+    const { client, directory } = createDirectory(serverId);
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true },
+    });
+
+    const demandSource = {};
+    directory.setDemand(demandSource, true);
+    await directory.refreshDemand();
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(true);
+
+    directory.connectionChanged({
+      client: null,
+      status: "offline",
+      source: { clientGeneration: 1, connectionEpoch: 1 },
+    });
+
+    const completeWorkspaceFetch = client.holdWorkspaceFetch();
+    directory.connectionChanged({
+      client: client as unknown as DaemonClient,
+      status: "online",
+      source: { clientGeneration: 1, connectionEpoch: 2 },
+    });
+    await expect.poll(() => client.fetchWorkspacesCalls).toBe(2);
+
+    // A workspace route reads this flag to tell "still loading" apart from "this
+    // workspace does not exist". The daemon drops an external session once the socket
+    // has been gone long enough, so a reconnect can be a fresh session whose directory
+    // has not been delivered yet -- answering "does not exist" there strands the route
+    // on an empty state until something else re-requests the workspace.
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(false);
+
+    completeWorkspaceFetch({
+      requestId: "workspaces",
+      entries: [],
+      emptyProjects: [],
+      pageInfo: { hasMore: false, nextCursor: null, prevCursor: null },
+    });
+    await directory.refreshDemand();
+
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(true);
+    directory.setDemand(demandSource, false);
+    directory.dispose();
+  });
+
   it("buffers workspace and project updates in the same hydration transaction", async () => {
     const serverId = "workspace-project-transaction";
     const { client, directory } = createDirectory(serverId);
