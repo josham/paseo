@@ -18,15 +18,29 @@ export type ContainerInfo = NonNullable<WorkspaceDescriptor["containerInfo"]>;
 export function ContainerStatusTooltipBody({
   containerStatus,
   containerInfo,
+  progressLine,
 }: {
   containerStatus: ContainerStatus;
   containerInfo: ContainerInfo | null | undefined;
+  /**
+   * Latest line of build output while one is running. Untranslated on purpose —
+   * it is the CLI's own output, and a label around it would say less than the
+   * line does.
+   */
+  progressLine?: string | null;
 }) {
   const { t } = useTranslation();
 
   if (!containerInfo) {
     return (
-      <Text style={styles.text}>{t(`workspace.header.container.${containerStatus}Tooltip`)}</Text>
+      <View style={styles.content}>
+        <Text style={styles.text}>{t(`workspace.header.container.${containerStatus}Tooltip`)}</Text>
+        {progressLine ? (
+          <Text style={styles.progress} numberOfLines={2}>
+            {progressLine}
+          </Text>
+        ) : null}
+      </View>
     );
   }
 
@@ -61,6 +75,13 @@ export function ContainerStatusTooltipBody({
           </View>
         ))}
       </View>
+      {/* A rebuild still has the old container's details to show, so the line
+          belongs here too rather than only in the no-details case. */}
+      {progressLine ? (
+        <Text style={styles.progress} numberOfLines={2}>
+          {progressLine}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -96,5 +117,9 @@ const styles = StyleSheet.create((theme) => ({
   text: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.popoverForeground,
+  },
+  progress: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
   },
 }));
