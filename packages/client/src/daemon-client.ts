@@ -41,6 +41,8 @@ import type {
   FileExplorerResponse,
   FileVersion,
   FileWriteResult,
+  CodeSymbolGetLocationsRequest,
+  CodeSymbolLocationsResult,
   FetchAgentTimelineResponseMessage,
   AgentForkContextResponseMessage,
   GitSetupOptions,
@@ -1042,6 +1044,7 @@ function toTimeoutError(error: unknown, label: string, timeoutMs: number): Error
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 1500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;
 const DEFAULT_SESSION_RPC_TIMEOUT_MS = 60_000;
+const CODE_SYMBOL_LOCATIONS_TIMEOUT_MS = 90_000;
 const PUSH_TOKEN_REVOCATION_TIMEOUT_MS = 2_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 5000;
@@ -4805,6 +4808,19 @@ export class DaemonClient {
       message: { type: "fs.file.write.request", ...input },
       responseType: "fs.file.write.response",
     });
+    return payload.result;
+  }
+
+  async getCodeSymbolLocations(
+    input: Omit<CodeSymbolGetLocationsRequest, "type" | "requestId">,
+  ): Promise<CodeSymbolLocationsResult> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"code.symbol.get_locations.response">({
+        message: { type: "code.symbol.get_locations.request", ...input },
+        // A cold language server loads the whole project before its first answer, and the daemon
+        // bounds that wait on its own; this only has to outlast it.
+        timeout: CODE_SYMBOL_LOCATIONS_TIMEOUT_MS,
+      });
     return payload.result;
   }
 
