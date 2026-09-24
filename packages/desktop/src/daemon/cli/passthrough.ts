@@ -2,7 +2,13 @@ import { pathToFileURL } from "node:url";
 import { resolvePassthroughCliEntrypoint } from "./entrypoints.js";
 
 const DESKTOP_CLI_ENV = "PASEO_DESKTOP_CLI";
-const IGNORED_ARG_PREFIXES = ["-psn_", "--class=", "--no-sandbox", "--remote-debugging-port="];
+const IGNORED_ARG_PREFIXES = [
+  "-psn_",
+  "--class=",
+  "--no-sandbox",
+  "--remote-debugging-port=",
+  "--updated",
+];
 
 export type PassthroughCliRunner = (argv: string[]) => Promise<number>;
 
