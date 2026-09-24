@@ -20,7 +20,10 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { InlineReviewThread } from "@/review";
-import { useKeyboardShift } from "@/hooks/keyboard-shift-context";
+import { describeDiffBlock, diffSymbolTarget } from "@/code-navigation/diff";
+import { SymbolActionsMenu, type SymbolMenuRequest } from "@/code-navigation/symbol-menu";
+import type { ReviewableDiffTarget } from "@/utils/diff-layout";
+import { useKeyboardShift } from "@/keyboard/shift";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { DocumentFileHeader } from "./document-file-header";
 import {
@@ -67,6 +70,7 @@ import {
 import type {
   DiffDocumentModel,
   DiffFileSection,
+  DiffHit,
   DiffSurfaceProps,
   DiffTypography,
   TextMeasurer,
@@ -75,6 +79,19 @@ import type {
 const AnimatedScrollView = createAnimatedComponent(ScrollView);
 const SYSTEM_MONO = "monospace";
 const CODE_LEFT_PADDING = 8;
+/** Matches the tap window: a touch held past it is a long press, not a tap to comment. */
+const LONG_PRESS_MS = 500;
+
+type CellHit = Extract<DiffHit, { kind: "cell" }>;
+type LongPressCell = (
+  hit: CellHit & { target: ReviewableDiffTarget },
+  point: { x: number; y: number },
+) => void;
+
+interface DiffSymbolMenuState {
+  request: SymbolMenuRequest;
+  target: ReviewableDiffTarget;
+}
 
 export function DiffSurface(props: DiffSurfaceProps) {
   const { t } = useTranslation();
@@ -108,6 +125,44 @@ export function DiffSurface(props: DiffSurfaceProps) {
     [family, typography.size],
   );
   const reviewActions = props.mode.kind === "working" ? props.mode.reviewActions : undefined;
+  const codeNavigation = props.mode.kind === "working" ? props.mode.codeNavigation : undefined;
+  const [symbolMenu, setSymbolMenu] = useState<DiffSymbolMenuState | null>(null);
+  const closeSymbolMenu = useCallback(() => setSymbolMenu(null), []);
+  const openSymbolMenu = useCallback<LongPressCell>(
+    (hit, point) => {
+      if (!codeNavigation) return;
+      const symbolTarget = diffSymbolTarget({
+        target: hit.target,
+        sourceOffset: hit.position.sourceOffset,
+        newSideOnDisk: codeNavigation.newSideOnDisk,
+      });
+      if (!symbolTarget) return;
+      setSymbolMenu({
+        request: {
+          point,
+          query: symbolTarget.query,
+          disabledReason: symbolTarget.blocked
+            ? describeDiffBlock(symbolTarget.blocked, t)
+            : undefined,
+        },
+        target: hit.target,
+      });
+    },
+    [codeNavigation, t],
+  );
+  const symbolMenuItems = useMemo(
+    () =>
+      reviewActions && symbolMenu
+        ? [
+            {
+              key: "comment",
+              label: t("review.comment.add"),
+              onSelect: () => reviewActions.onStartComment(symbolMenu.target),
+            },
+          ]
+        : [],
+    [reviewActions, symbolMenu, t],
+  );
   const model = useMemo(() => {
     const dependencies = [
       props.displayPreferences.layout,
@@ -306,11 +361,21 @@ export function DiffSurface(props: DiffSurfaceProps) {
             model={model}
             mode={props.mode}
             horizontalOffsets={horizontalOffsets}
+            onLongPressCell={codeNavigation ? openSymbolMenu : undefined}
           />
         ))}
         <NativeReviewOverlays model={model} mode={props.mode} />
         <Animated.View pointerEvents="none" style={keyboardSpacerStyle} />
       </AnimatedScrollView>
+      {codeNavigation ? (
+        <SymbolActionsMenu
+          request={symbolMenu?.request ?? null}
+          onClose={closeSymbolMenu}
+          navigation={codeNavigation.navigation}
+          extraItems={symbolMenuItems}
+          testID="diff-symbol-menu"
+        />
+      ) : null}
     </View>
   );
 }
@@ -436,36 +501,85 @@ function NativeFileBody({
   model,
   mode,
   horizontalOffsets,
+  onLongPressCell,
 }: {
   file: DiffFileSection;
   model: DiffDocumentModel;
   mode: DiffSurfaceProps["mode"];
   horizontalOffsets: SharedValue<DiffHorizontalOffsets>;
+  onLongPressCell?: LongPressCell;
 }) {
-  const touchRef = useRef<{ x: number; y: number; startedAt: number; moved: boolean } | null>(null);
+  const touchRef = useRef<{
+    x: number;
+    y: number;
+    locationX: number;
+    locationY: number;
+    startedAt: number;
+    moved: boolean;
+    longPressed: boolean;
+  } | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewActions = mode.kind === "working" ? mode.reviewActions : undefined;
-  const touchStart = useCallback((event: GestureResponderEvent) => {
-    touchRef.current = {
-      x: event.nativeEvent.pageX,
-      y: event.nativeEvent.pageY,
-      startedAt: Date.now(),
-      moved: false,
-    };
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
   }, []);
-  const touchMove = useCallback((event: GestureResponderEvent) => {
-    const touch = touchRef.current;
-    if (
-      touch &&
-      Math.hypot(event.nativeEvent.pageX - touch.x, event.nativeEvent.pageY - touch.y) > 10
-    ) {
-      touch.moved = true;
-    }
-  }, []);
+  useEffect(() => clearLongPress, [clearLongPress]);
+  const touchStart = useCallback(
+    (event: GestureResponderEvent) => {
+      const touch = {
+        x: event.nativeEvent.pageX,
+        y: event.nativeEvent.pageY,
+        locationX: event.nativeEvent.locationX,
+        locationY: event.nativeEvent.locationY,
+        startedAt: Date.now(),
+        moved: false,
+        longPressed: false,
+      };
+      touchRef.current = touch;
+      clearLongPress();
+      if (!onLongPressCell) return;
+      longPressTimerRef.current = setTimeout(() => {
+        if (touchRef.current !== touch || touch.moved) return;
+        touch.longPressed = true;
+        const hit = hitTestDiffBodyPoint({
+          model,
+          file,
+          locationX: touch.locationX,
+          locationY: touch.locationY,
+          horizontalOffset: horizontalOffsetForPath(horizontalOffsets.value, file.path),
+        });
+        if (hit?.kind === "cell" && hit.target) {
+          onLongPressCell({ ...hit, target: hit.target }, { x: touch.x, y: touch.y });
+        }
+      }, LONG_PRESS_MS);
+    },
+    [clearLongPress, file, horizontalOffsets, model, onLongPressCell],
+  );
+  const touchMove = useCallback(
+    (event: GestureResponderEvent) => {
+      const touch = touchRef.current;
+      if (
+        touch &&
+        Math.hypot(event.nativeEvent.pageX - touch.x, event.nativeEvent.pageY - touch.y) > 10
+      ) {
+        touch.moved = true;
+        clearLongPress();
+      }
+    },
+    [clearLongPress],
+  );
+  const touchCancel = useCallback(() => {
+    touchRef.current = null;
+    clearLongPress();
+  }, [clearLongPress]);
   const touchEnd = useCallback(
     (event: GestureResponderEvent) => {
       const touch = touchRef.current;
       touchRef.current = null;
-      if (!touch || touch.moved || Date.now() - touch.startedAt > 500 || !reviewActions) return;
+      clearLongPress();
+      if (!touch || touch.moved || touch.longPressed) return;
+      if (Date.now() - touch.startedAt > LONG_PRESS_MS || !reviewActions) return;
       const hit = hitTestDiffBodyPoint({
         model,
         file,
@@ -475,7 +589,7 @@ function NativeFileBody({
       });
       if (hit?.kind === "cell" && hit.target) reviewActions.onStartComment(hit.target);
     },
-    [file, horizontalOffsets, model, reviewActions],
+    [clearLongPress, file, horizontalOffsets, model, reviewActions],
   );
   return (
     <View
@@ -491,6 +605,7 @@ function NativeFileBody({
       onTouchStart={touchStart}
       onTouchMove={touchMove}
       onTouchEnd={touchEnd}
+      onTouchCancel={touchCancel}
     >
       {!file.isCollapsed && !model.wrapLines ? (
         <HorizontalScroll file={file} offsets={horizontalOffsets} />

@@ -563,10 +563,18 @@ function readProbedPath(output: string): string | null {
   return null;
 }
 
-function executableNotFoundError(command: string): Error {
-  return new Error(
-    `'${command}' is not on the container's PATH. Install it in the image, put it on PATH there, or run this workspace on the host.`,
-  );
+/** The command is not installed where the workspace runs; callers can report it as absent. */
+export class ExecutableNotFoundError extends Error {
+  constructor(readonly command: string) {
+    super(
+      `'${command}' is not on the container's PATH. Install it in the image, put it on PATH there, or run this workspace on the host.`,
+    );
+    this.name = "ExecutableNotFoundError";
+  }
+}
+
+function executableNotFoundError(command: string): ExecutableNotFoundError {
+  return new ExecutableNotFoundError(command);
 }
 
 /** Rebuild a strategy from its serialized form (e.g. inside the terminal worker). */

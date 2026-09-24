@@ -93,6 +93,9 @@ function deferred<Value>(): Deferred<Value> {
     resolve = onResolve;
     reject = onReject;
   });
+  // Provider events can reject before send() settles and the caller awaits this promise.
+  // Observe that interval without replacing the rejecting promise returned to the caller.
+  void promise.catch(() => undefined);
   return { promise, resolve, reject };
 }
 
@@ -1036,6 +1039,7 @@ class PluginAgentSession implements AgentSession {
   private readonly permissionResponses = new Map<string, AgentPermissionResponse>();
   private readonly revertTokens = new Map<string, ProviderTimelineItem["revertToken"]>();
   private readonly timelineSnapshots = new Map<string, ProviderTimelineItem>();
+  private readonly subagentIdsBySession = new Map<string, string | null>();
   private readonly childUnsubscribes = new Map<string, () => void>();
   private readonly childSnapshots = new Map<string, Map<string, ProviderTimelineItem>>();
   private unsubscribe: (() => void) | null = null;
@@ -1047,6 +1051,7 @@ class PluginAgentSession implements AgentSession {
     private readonly bridge: ProviderRuntimeSession,
     private readonly onClose: () => void,
   ) {
+    this.subagentIdsBySession.set(bridge.id, null);
     for (const event of bridge.history) this.accept(event, false);
     this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
   }
@@ -1188,6 +1193,7 @@ class PluginAgentSession implements AgentSession {
     this.unsubscribe = null;
     for (const unsubscribe of this.childUnsubscribes.values()) unsubscribe();
     this.childUnsubscribes.clear();
+    this.subagentIdsBySession.clear();
     this.listeners.clear();
     this.onClose();
     await this.bridge.close();
@@ -1244,13 +1250,22 @@ class PluginAgentSession implements AgentSession {
     child: ProviderRuntimeSession,
     opened: Extract<ProviderEvent, { type: "session.opened" }>,
   ): void {
+    const parentSubagentId = opened.parentSessionId
+      ? this.subagentIdsBySession.get(opened.parentSessionId)
+      : undefined;
+    if (parentSubagentId === undefined) {
+      throw new Error(`Missing plugin child parent ${opened.parentSessionId}`);
+    }
     const childId = child.providerId;
+    this.subagentIdsBySession.set(child.id, childId);
     this.publish({
       type: "provider_subagent",
       provider: this.provider,
       event: {
         type: "upsert",
         id: childId,
+        parentSubagentId,
+        toolCallId: opened.toolCallId ?? null,
         title: opened.title ?? null,
         description: opened.description ?? null,
         status: "running",

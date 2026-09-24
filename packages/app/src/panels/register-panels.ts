@@ -5,6 +5,7 @@ import {
   commitDiffPanelRegistration,
   workingDiffPanelRegistration,
 } from "@/panels/diff-panel";
+import { codeLocationsPanelRegistration } from "@/panels/code-locations-panel";
 import { draftPanelRegistration } from "@/panels/draft-panel";
 import { filePanelRegistration } from "@/panels/file-panel";
 import { filesPanelRegistration } from "@/panels/files-panel";
@@ -35,6 +36,7 @@ export function ensurePanelsRegistered(): void {
   registerPanel(commitDiffPanelRegistration);
   registerPanel(workingDiffPanelRegistration);
   registerPanel(changesTreePanelRegistration);
+  registerPanel(codeLocationsPanelRegistration);
   registerPanel(pluginPanelRegistration);
   panelsRegistered = true;
 }
