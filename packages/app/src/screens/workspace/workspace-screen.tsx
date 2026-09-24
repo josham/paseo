@@ -345,6 +345,9 @@ function getFallbackTabOptionLabel(
   if (tab.target.kind === "commit_diff") {
     return tab.target.sha.slice(0, 7);
   }
+  if (tab.target.kind === "code_locations") {
+    return tab.target.symbol;
+  }
   return labels.agent;
 }
 
@@ -385,6 +388,9 @@ function getFallbackTabOptionDescription(
   }
   if (tab.target.kind === "commit_diff") {
     return tab.target.sha.slice(0, 7);
+  }
+  if (tab.target.kind === "code_locations") {
+    return tab.target.symbol;
   }
   if (tab.target.kind === "working_diff" || tab.target.kind === "changes_tree") {
     return labels.changes;

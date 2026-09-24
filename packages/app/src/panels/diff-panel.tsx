@@ -16,6 +16,8 @@ import { useAppSettings } from "@/hooks/use-settings";
 import { usePaneContext } from "@/panels/pane-context";
 import { definePanel, type PanelDescriptor, type PanelPresentation } from "@/panels/panel-registry";
 import { useAddFileToChat } from "@/panels/use-add-file-to-chat";
+import { useCodeNavigation } from "@/code-navigation/use-code-navigation";
+import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { defaultChangesState, changesStateSchema } from "@/panels/changes/state";
@@ -104,6 +106,18 @@ function ChangesPanel() {
     [isTree, openPreferredTarget],
   );
 
+  const openFileLocation = useCallback(
+    (location: WorkspaceFileLocation) =>
+      openPreferredTarget({ kind: "file", ...location }, isTree ? "diffs" : "diffFiles"),
+    [isTree, openPreferredTarget],
+  );
+  const { navigation, resultsSheet } = useCodeNavigation({
+    serverId,
+    workspaceId,
+    cwd,
+    openLocation: openFileLocation,
+  });
+
   const handleSelectDiffFile = useCallback(
     (path: string) =>
       openPreferredTarget(
@@ -143,8 +157,10 @@ function ChangesPanel() {
           onAddToChat={canAddToChat ? addFile : undefined}
           state={changesState}
           onStateChange={setChangesState}
+          codeNavigation={navigation}
         />
       </RenderProfile>
+      {resultsSheet}
     </View>
   );
 }
