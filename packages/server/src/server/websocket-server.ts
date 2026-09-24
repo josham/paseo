@@ -101,6 +101,7 @@ import type { DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
 import { DirectorySyncService } from "./directory-sync/index.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import type { WorkspaceLabelService } from "./workspace-labels/index.js";
+import type { CodeNavigationService } from "./code-navigation/service.js";
 import {
   APPLICATION_SOCKET_LEASE_CHECK_INTERVAL_MS,
   ApplicationSocketLease,
@@ -283,6 +284,7 @@ function createFallbackWorkspaceGitService(): WorkspaceGitService {
         nativeTrackedFileCount: 0,
         pendingEventCount: 0,
         pendingReconciliationWorkCount: 0,
+        pendingClassificationCount: 0,
         reconciliationInFlightCount: 0,
         reconciliationCount: 0,
         scopedReconciliationCount: 0,
@@ -592,6 +594,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly devContainerAvailable: boolean;
   private readonly launchStrategyRegistry: LaunchStrategyRegistry | null;
   private readonly containerBackends: ContainerBackendRegistry | null;
+  private readonly codeNavigation: CodeNavigationService | null;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -662,6 +665,7 @@ export class VoiceAssistantWebSocketServer {
     devContainerAvailable?: boolean,
     launchStrategyRegistry?: LaunchStrategyRegistry,
     containerBackends?: ContainerBackendRegistry,
+    codeNavigation?: CodeNavigationService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -681,6 +685,7 @@ export class VoiceAssistantWebSocketServer {
     this.devContainerAvailable = devContainerAvailable ?? false;
     this.launchStrategyRegistry = launchStrategyRegistry ?? null;
     this.containerBackends = containerBackends ?? null;
+    this.codeNavigation = codeNavigation ?? null;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
@@ -1479,6 +1484,7 @@ export class VoiceAssistantWebSocketServer {
       daemonConfigStore: this.daemonConfigStore,
       pluginRuntime: this.pluginRuntime,
       orchestrationSkills: this.orchestrationSkills,
+      codeNavigation: this.codeNavigation ?? undefined,
       mcpBaseUrl: this.mcpBaseUrl,
       stt: () => this.speech?.resolveStt() ?? null,
       sttLanguage: this.speech?.resolveSttLanguage() ?? "en",
@@ -1696,6 +1702,8 @@ export class VoiceAssistantWebSocketServer {
         directorySync: true,
         // COMPAT(workspaceLabels): added in v0.5.0, remove after 2027-08-14.
         ...(this.workspaceLabelService ? { workspaceLabels: true } : {}),
+        // COMPAT(codeNavigation): added in v0.9.3, remove gate after 2027-09-24.
+        ...(this.codeNavigation ? { codeNavigation: true } : {}),
         // COMPAT(workspaceSetupRun): added in v0.7.3, remove gate after 2027-09-02.
         workspaceSetupRun: true,
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.
@@ -1734,6 +1742,8 @@ export class VoiceAssistantWebSocketServer {
         plugins: true,
         pluginManagement: true,
         pluginGitManagement: true,
+        pluginSourceInstallation: true,
+        pluginSourceUpdates: true,
         pluginLogs: true,
         // COMPAT(pluginThemes): added in v0.5.0, remove gate after 2027-08-20.
         pluginThemes: true,
@@ -2218,7 +2228,11 @@ export class VoiceAssistantWebSocketServer {
       this.recordInboundMessageType(message.type);
 
       if (message.type === "ping") {
-        this.applicationSocketLease.claim(ws);
+        // A plugin socket is IPC to a child this daemon already supervises, not
+        // an abandonable application socket.
+        if (!this.pluginSocketIds.has(ws)) {
+          this.applicationSocketLease.claim(ws);
+        }
         this.sendToClient(ws, { type: "pong" });
         return;
       }
