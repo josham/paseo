@@ -2762,6 +2762,37 @@ export const FileWriteRequestSchema = z.object({
   requestId: z.string(),
 });
 
+/**
+ * A position in a text document: zero-based line, and a zero-based character offset in UTF-16
+ * code units, which is both LSP's default encoding and JavaScript string indexing.
+ */
+export const CodePositionSchema = z.object({
+  line: z.number().int().nonnegative(),
+  character: z.number().int().nonnegative(),
+});
+
+export const CodeRangeSchema = z.object({
+  start: CodePositionSchema,
+  end: CodePositionSchema,
+});
+
+export const CodeSymbolLocationKindSchema = z.enum(["definition", "references"]);
+
+export const CodeSymbolGetLocationsRequestSchema = z.object({
+  type: z.literal("code.symbol.get_locations.request"),
+  cwd: z.string(),
+  /** Workspace-relative path of the document the position refers to. */
+  path: z.string(),
+  kind: CodeSymbolLocationKindSchema,
+  position: CodePositionSchema,
+  /**
+   * Unsaved editor text for `path`. Without it the language server reads the file on disk, and
+   * positions taken from a dirty buffer would point at the wrong symbol.
+   */
+  content: z.string().optional(),
+  requestId: z.string(),
+});
+
 export const FileEntryCreateRequestSchema = z.object({
   type: z.literal("fs.entry.create.request"),
   cwd: z.string(),
@@ -3307,6 +3338,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeRequestSchema,
   FileUnsubscribeRequestSchema,
   FileWriteRequestSchema,
+  CodeSymbolGetLocationsRequestSchema,
   FileEntryCreateRequestSchema,
   FileEntryRenameRequestSchema,
   FileEntryDuplicateRequestSchema,
@@ -3615,6 +3647,8 @@ export const ServerInfoStatusPayloadSchema = z
         worktreeRestore: z.boolean().optional(),
         // COMPAT(workspaceRecovery): added in v0.1.105, remove after 2027-01-11 once daemon floor >= v0.1.105.
         workspaceRecovery: z.boolean().optional(),
+        // COMPAT(codeNavigation): added in v0.9.3, remove gate after 2027-09-24.
+        codeNavigation: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
@@ -5972,6 +6006,51 @@ export const FileWriteResponseSchema = z.object({
   }),
 });
 
+export const CodeLocationSchema = z.object({
+  /** Workspace-relative when the target is inside the workspace, absolute otherwise. */
+  path: z.string(),
+  range: CodeRangeSchema,
+  /** The target's first line, trimmed; null when the file could not be read. */
+  preview: z.string().nullable(),
+  /**
+   * False when the target exists only where the language server runs, such as a library inside
+   * a dev container image, so the file viewer has no way to read it.
+   */
+  openable: z.boolean(),
+});
+
+export const CodeSymbolLocationsResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    locations: z.array(CodeLocationSchema),
+    /** The symbol the position resolved to, as the language server delimits it. */
+    originRange: CodeRangeSchema.nullable(),
+    /** The server was still indexing when it answered, so references may be missing. */
+    partial: z.boolean(),
+    truncated: z.boolean(),
+  }),
+  z.object({ status: z.literal("unsupported_language") }),
+  z.object({
+    status: z.literal("server_not_installed"),
+    serverId: z.string(),
+    /** Commands probed, in preference order; installing any one of them enables the language. */
+    commands: z.array(z.string()),
+  }),
+  z.object({
+    status: z.literal("unavailable"),
+    reason: z.enum(["disabled", "not_a_workspace", "container_not_running"]),
+  }),
+  z.object({ status: z.literal("failed"), message: z.string() }),
+]);
+
+export const CodeSymbolGetLocationsResponseSchema = z.object({
+  type: z.literal("code.symbol.get_locations.response"),
+  payload: z.object({
+    result: CodeSymbolLocationsResultSchema,
+    requestId: z.string(),
+  }),
+});
+
 export const FileEntryCreateResponseSchema = z.object({
   type: z.literal("fs.entry.create.response"),
   payload: z.object({
@@ -6894,6 +6973,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeResponseSchema,
   FileUnsubscribeResponseSchema,
   FileWriteResponseSchema,
+  CodeSymbolGetLocationsResponseSchema,
   FileEntryCreateResponseSchema,
   FileEntryRenameResponseSchema,
   FileEntryDuplicateResponseSchema,
@@ -7331,6 +7411,13 @@ export type FileUnsubscribeRequest = z.infer<typeof FileUnsubscribeRequestSchema
 export type FileUnsubscribeResponse = z.infer<typeof FileUnsubscribeResponseSchema>;
 export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 export type FileWriteResponse = z.infer<typeof FileWriteResponseSchema>;
+export type CodePosition = z.infer<typeof CodePositionSchema>;
+export type CodeRange = z.infer<typeof CodeRangeSchema>;
+export type CodeSymbolLocationKind = z.infer<typeof CodeSymbolLocationKindSchema>;
+export type CodeLocation = z.infer<typeof CodeLocationSchema>;
+export type CodeSymbolLocationsResult = z.infer<typeof CodeSymbolLocationsResultSchema>;
+export type CodeSymbolGetLocationsRequest = z.infer<typeof CodeSymbolGetLocationsRequestSchema>;
+export type CodeSymbolGetLocationsResponse = z.infer<typeof CodeSymbolGetLocationsResponseSchema>;
 export type FileEntryCreateRequest = z.infer<typeof FileEntryCreateRequestSchema>;
 export type FileEntryCreateResponse = z.infer<typeof FileEntryCreateResponseSchema>;
 export type FileEntryRenameRequest = z.infer<typeof FileEntryRenameRequestSchema>;

@@ -87,6 +87,9 @@ const INBOUND_PERMISSION = {
   "file.upload.request": "workspace.write",
   file_download_token_request: "workspace.read",
   file_explorer_request: "workspace.read",
+  // Starting a language server runs project code (build scripts, `go list`), which is write
+  // authority for the same reason terminals are.
+  "code.symbol.get_locations.request": "workspace.write",
   "forge.search.request": "workspace.read",
   "fs.entry.create.request": "workspace.write",
   "fs.entry.delete.request": "workspace.write",
@@ -308,6 +311,7 @@ const OUTBOUND_PERMISSION = {
   "file.upload.response": "workspace.write",
   file_download_token_response: "workspace.read",
   file_explorer_response: "workspace.read",
+  "code.symbol.get_locations.response": "workspace.write",
   "forge.search.response": "workspace.read",
   "fs.entry.create.response": "workspace.write",
   "fs.entry.delete.response": "workspace.write",

@@ -5,7 +5,9 @@ import { EditorView } from "@codemirror/view";
 import { getLanguageForFile } from "@getpaseo/highlight";
 import { getCM, vim } from "@replit/codemirror-vim";
 import { isRenderedMarkdownFile } from "@/components/file-pane-render-mode";
+import type { SymbolActions } from "@/code-navigation/symbol-actions";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
+import { codeNavigationExtension } from "../source/code-navigation.web";
 import type { FileEditorModel } from "./model";
 import { editorBaseExtensions, editorTheme, type EditorVisualTheme } from "./extensions.web";
 
@@ -18,6 +20,7 @@ interface FileEditorViewProps {
   theme: EditorVisualTheme;
   onCursorChange(position: { line: number; column: number }): void;
   onVimModeChange(mode: string | null): void;
+  symbolActions: SymbolActions | null;
 }
 
 const languageCompartment = new Compartment();
@@ -38,6 +41,7 @@ export function FileEditorView({
   theme,
   onCursorChange,
   onVimModeChange,
+  symbolActions,
 }: FileEditorViewProps) {
   const [find] = useState(() => new FileFindModel());
   const hostRef = useRef<HTMLDivElement>(null);
@@ -46,6 +50,8 @@ export function FileEditorView({
   const initial = useRef({ filename, model, theme, vimEnabled, content: snapshot.content });
   const onCursorChangeRef = useRef(onCursorChange);
   onCursorChangeRef.current = onCursorChange;
+  const symbolActionsRef = useRef(symbolActions);
+  symbolActionsRef.current = symbolActions;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -57,6 +63,7 @@ export function FileEditorView({
         extensions: [
           vimCompartment.of(values.vimEnabled ? vim() : []),
           find.extension,
+          codeNavigationExtension(() => symbolActionsRef.current),
           ...editorBaseExtensions(() => void values.model.save()),
           languageCompartment.of(getLanguageForFile(values.filename)?.extension ?? []),
           wrappingCompartment.of(wrappingForFile(values.filename)),

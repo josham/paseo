@@ -3,7 +3,7 @@ import { openWorkspaceFileFromExplorer } from "@/screens/workspace/workspace-fil
 
 function createInput(closeExplorerAfterOpen: boolean) {
   return {
-    filePath: "src/app.tsx",
+    location: { path: "src/app.tsx" },
     persistenceKey: "server:workspace",
     closeExplorerAfterOpen,
     showMobileAgent: vi.fn(),
