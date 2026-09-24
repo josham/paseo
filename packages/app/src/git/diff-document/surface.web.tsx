@@ -13,6 +13,7 @@ import { useToast } from "@/contexts/toast-context";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { InlineReviewAddButton, InlineReviewThread } from "@/review";
 import { copyToClipboard } from "@/utils/copy-to-clipboard";
+import { describeDiffBlock, diffSymbolTarget } from "@/code-navigation/diff";
 import type { ReviewableDiffTarget } from "@/utils/diff-layout";
 import { DocumentFileHeader } from "./document-file-header";
 import {
@@ -159,6 +160,18 @@ export function DiffSurface(props: DiffSurfaceProps) {
   const measurement =
     readyTypographyResource === typographyResource ? typographyResource.measureText : null;
   const reviewActions = props.mode.kind === "working" ? props.mode.reviewActions : undefined;
+  const codeNavigation = props.mode.kind === "working" ? props.mode.codeNavigation : undefined;
+  const symbolTargetOf = useCallback(
+    (hit: Extract<DiffHit, { kind: "cell" }> | null) =>
+      codeNavigation && hit?.target
+        ? diffSymbolTarget({
+            target: hit.target,
+            sourceOffset: hit.position.sourceOffset,
+            newSideOnDisk: codeNavigation.newSideOnDisk,
+          })
+        : null,
+    [codeNavigation],
+  );
   const model = useMemo(() => {
     if (!loadedTypography || !measurement) {
       return emptyDiffDocumentModel({
@@ -595,6 +608,12 @@ export function DiffSurface(props: DiffSurfaceProps) {
       }
       const hit = pointHit(event);
       if (hit?.kind !== "cell") return;
+      const symbolTarget = event.metaKey || event.ctrlKey ? symbolTargetOf(hit) : null;
+      if (codeNavigation && symbolTarget && !symbolTarget.blocked) {
+        event.preventDefault();
+        codeNavigation.navigation.goToDefinition(symbolTarget.query);
+        return;
+      }
       dragRef.current = {
         anchor: hit.position,
         startX: event.clientX,
@@ -606,7 +625,7 @@ export function DiffSurface(props: DiffSurfaceProps) {
       event.currentTarget.focus();
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [pointHit, setSelection],
+    [codeNavigation, pointHit, setSelection, symbolTargetOf],
   );
   const updateActiveHeader = useCallback(
     (target: EventTarget | null) => {
@@ -720,6 +739,18 @@ export function DiffSurface(props: DiffSurfaceProps) {
     },
     [pointHitAt],
   );
+  const contextSymbol = useMemo(() => symbolTargetOf(contextHit), [contextHit, symbolTargetOf]);
+  const contextBlockReason = contextSymbol?.blocked
+    ? describeDiffBlock(contextSymbol.blocked, t)
+    : undefined;
+  const goToContextDefinition = useCallback(() => {
+    if (codeNavigation && contextSymbol) {
+      codeNavigation.navigation.goToDefinition(contextSymbol.query);
+    }
+  }, [codeNavigation, contextSymbol]);
+  const findContextUsages = useCallback(() => {
+    if (codeNavigation && contextSymbol) codeNavigation.navigation.findUsages(contextSymbol.query);
+  }, [codeNavigation, contextSymbol]);
   const writeSourceText = useCallback(
     (text: string) => {
       void copyToClipboard(text)
@@ -901,6 +932,26 @@ export function DiffSurface(props: DiffSurfaceProps) {
         >
           {t("common.actions.copyLine")}
         </ContextMenuItem>
+        {codeNavigation && contextSymbol ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              disabled={Boolean(contextSymbol.blocked)}
+              description={contextBlockReason}
+              onSelect={goToContextDefinition}
+              testID="diff-source-go-to-definition"
+            >
+              {t("panels.codeNavigation.goToDefinition")}
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={Boolean(contextSymbol.blocked)}
+              onSelect={findContextUsages}
+              testID="diff-source-find-usages"
+            >
+              {t("panels.codeNavigation.findUsages")}
+            </ContextMenuItem>
+          </>
+        ) : null}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={selectAll} testID="diff-source-select-all">
           {t("common.actions.selectAll")}
