@@ -1,4 +1,5 @@
 import type { ParsedDiffFile } from "@getpaseo/protocol/messages";
+import type { CodeNavigation } from "@/code-navigation/use-code-navigation";
 import type { InlineReviewActions } from "@/review";
 import type { ReviewableDiffTarget } from "@/utils/diff-layout";
 
@@ -14,9 +15,17 @@ interface DiffDocumentBaseProps {
   };
 }
 
+export interface DiffCodeNavigation {
+  navigation: CodeNavigation;
+  /** The new side is the working tree, so its lines are where the language server reads them. */
+  newSideOnDisk: boolean;
+}
+
 export interface WorkingDiffMode {
   kind: "working";
   reviewActions?: InlineReviewActions;
+  /** Go to definition and Find usages from a line; absent when the host cannot navigate code. */
+  codeNavigation?: DiffCodeNavigation;
   onFilePress?: (path: string) => void;
   focusPath?: string;
   focusRequestId?: number;
