@@ -121,33 +121,26 @@ exec env \\
 LAUNCHER
 chmod +x "$launcher"
 
-# StartupWMClass must be the Wayland app_id, which is "getpaseo-desktop" -- Electron's
-# default, derived from the package name @getpaseo/desktop. Nothing overrides it: no
-# app.setDesktopName() call, no desktop block in electron-builder.yml, and neither
-# app.setName() nor PASEO_TEST_APP_NAME above changes it. Without a match KWin resolves
-# no icon at all and Plasma falls back to breeze/apps/48/wayland.svg -- a gold "W".
+# StartupWMClass must be the Wayland app_id, which is "Paseo": package.json carries
+# desktopName "Paseo.desktop" and Electron strips the suffix (measured on 1.10.0 via
+# KWin's desktopFileName). PASEO_TEST_APP_NAME and --class=paseo-edge do not change it.
 #
-# --class=paseo-edge does not help; it is X11-only and a window launched with it still
-# reports getpaseo-desktop (measured). Nor is it the space in productName "Paseo Edge":
-# a build with productName "Paseo" on the same toolchain reports getpaseo-desktop too.
-# It is a version change. Paseo 0.5.0-beta.4 reported app_id "Paseo", which is why an
-# old stock install still matches its own StartupWMClass=Paseo and shows the right icon;
-# current builds on Electron 44 do not. So this is upstream's bug as much as ours, and
-# the fix at the source is app.setDesktopName() in main.ts.
-#
-# While a stock install predates the change its app_id stays "Paseo" and the two entries
-# stay distinct. Once stock updates, both report getpaseo-desktop and this entry claims
-# either window.
+# Plasma maps the app_id to a desktop entry twice: for the window icon (no match falls
+# back to breeze's gold "W") and on login, when it restores the previous session. With
+# no Paseo.desktop it takes whichever entry has StartupWMClass=Paseo, so a stock install
+# claiming that class gets launched on login in place of Edge. Remove stock Paseo's
+# paseo-desktop.desktop, or Edge windows are restored as stock.
 cat > "$desktop_entry" <<ENTRY
 [Desktop Entry]
 Name=Paseo Edge
-Comment=Paseo Edge — fork build, runs alongside a stock Paseo
+Comment=Paseo Edge — fork build of Paseo
 Exec=$launcher %U
 Icon=paseo-edge
 Terminal=false
 Type=Application
 Categories=Development;
-StartupWMClass=getpaseo-desktop
+MimeType=x-scheme-handler/paseo;
+StartupWMClass=Paseo
 ENTRY
 
 echo "installed:"
