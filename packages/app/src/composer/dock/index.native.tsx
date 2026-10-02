@@ -2,9 +2,9 @@ import { ComposerDockBackground } from "./internal/background";
 export { ComposerDockBackground } from "./internal/background";
 import { ScrollView } from "@/components/ui/scroll-view";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { HEADER_INNER_HEIGHT, MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { HEADER_INNER_HEIGHT } from "@/constants/layout";
 import { KeyboardTranslateView } from "@/keyboard/shift";
-import { createContext, useCallback, useContext, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { View, type LayoutChangeEvent, type ViewProps, StyleSheet } from "react-native";
 import Animated, {
   useAnimatedStyle,
@@ -15,6 +15,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useKeyboardShift } from "@/keyboard/shift";
 import { updateComposerCapacity, type ComposerCapacity } from "./internal/capacity";
+import { useSettings } from "@/hooks/use-settings";
 
 const ViewportCapacity = createContext<SharedValue<number | undefined> | null>(null);
 
@@ -91,6 +92,16 @@ export function ComposerDock({
   const insets = useSafeAreaInsets();
   // Preserve the existing centered form's visual balance on tablets.
   const bottomInset = centered ? HEADER_INNER_HEIGHT + 24 : 0;
+  // The measure lands on the Animated.View that KeyboardTranslateView renders, which
+  // must not carry a Unistyles theme-factory style (see docs/unistyles.md — the two
+  // runtimes race on the same native node and crash on theme change). Read the setting
+  // directly and pass the measure through as a plain inline style instead of the
+  // `theme.layout` token.
+  const contentWidth = useSettings((settings) => settings.contentWidth);
+  const centeredStyle = useMemo(
+    () => [dockStyles.centered, { maxWidth: contentWidth }],
+    [contentWidth],
+  );
   if (centered) {
     return (
       <ComposerViewport
@@ -98,7 +109,7 @@ export function ComposerDock({
         bottomInset={bottomInset}
         centered
       >
-        <KeyboardTranslateView style={dockStyles.centered}>
+        <KeyboardTranslateView style={centeredStyle}>
           <ComposerViewportContent style={dockStyles.composer}>
             <ScrollView style={dockStyles.setup} keyboardShouldPersistTaps="handled">
               {content}
@@ -143,7 +154,7 @@ const dockStyles = StyleSheet.create({
   content: { flex: 1, justifyContent: "flex-end" },
   composer: { width: "100%", flexShrink: 1 },
   centeredViewport: { flex: 1, alignItems: "center", justifyContent: "center" },
-  centered: { flexShrink: 1, width: "100%", maxWidth: MAX_CONTENT_WIDTH },
+  centered: { flexShrink: 1, width: "100%" },
   // Reserve the composer's own capped height before the setup scroll view shrinks.
   centeredComposer: { width: "100%", flexShrink: 0 },
   setup: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
