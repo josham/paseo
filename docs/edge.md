@@ -153,16 +153,12 @@ The tag starts the build. It takes roughly 20 minutes, after which the AppImage 
 the [releases page](https://github.com/josham/paseo/releases).
 
 If two of our branches conflict, `rebuild.sh` stops and leaves the conflict in the tree.
-Resolve it, `git commit`, and re-run. `git config rerere.enabled true` (do this once)
-makes git replay that resolution on later rebuilds, so a recurring conflict costs one
-fix rather than one per release — `rebuild.sh` stages what rerere replays and carries
-on, so the second rebuild of the same stack is unattended.
-
-`feat/configurable-content-width` and `fix/numeric-settings-clamp-resync` are the
-standing example: one extracts `FontSizeRow` into its own module, the other renames it
-in place to `PixelSizeRow`. The recorded resolution imports the extracted component
-under the feature's name and gives `commitContentWidth` the same "return the clamped
-value" contract as the font-size commits. It goes away when either PR lands upstream.
+Resolve it, `git commit`, and re-run. `git config rerere.enabled true` (do this once
+per clone) makes git replay that resolution on later rebuilds, so a recurring conflict
+costs one fix rather than one per release — `rebuild.sh` stages what rerere replays and
+carries on, so the second rebuild of the same stack is unattended. The recorded
+resolutions live in the clone's `.git/rr-cache`, not in the repo, so a rebuild on
+another machine starts without them.
 
 ## Building locally
 

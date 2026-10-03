@@ -20,7 +20,6 @@
 #
 # edge/tooling is always merged first and does not belong in this list.
 
-feat/configurable-content-width  # Content width as an Appearance setting (#3652, closed upstream)
 fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (#3655, open)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
