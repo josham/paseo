@@ -1,0 +1,308 @@
+# Paseo Edge — the josham/paseo fork's own Android APK.
+#
+# This file exists only on edge/tooling (and therefore on edge/main). Upstream never
+# has it, so it never conflicts on a rebase.
+#
+# It deliberately does not reuse upstream's android-apk-release.yml: that builds on EAS,
+# which needs an Expo account, an EXPO_TOKEN and build quota, and it publishes under
+# getpaseo's project. This builds from source on the runner instead — `expo prebuild`
+# plus Gradle, the same path docs/android.md documents for F-Droid — so the only secret
+# it needs is our own signing key.
+#
+# Runs off the same edge-v* tag as edge-linux-release.yml and uploads into the same
+# release. Whichever job gets there first creates it, from the same notes generator.
+
+name: Edge Android Release
+
+on:
+  push:
+    tags:
+      - "edge-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing edge-v tag to build (e.g. edge-v1.4.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: edge-android-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  EDGE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  APP_PACKAGE_PATH: "packages/app"
+  # arm64 only: it is every Android device made since 2017, and a universal APK would
+  # carry three more ABIs nobody here runs. The property is React Native's own, so it
+  # works the same in this build as in the F-Droid one.
+  ANDROID_ABI: "arm64-v8a"
+
+jobs:
+  publish-android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.EDGE_TAG }}
+
+      - name: Resolve version and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${EDGE_TAG#edge-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a tag like edge-v1.2.3, got '$EDGE_TAG'"
+            exit 1
+          fi
+          echo "EDGE_VERSION=$version" >> "$GITHUB_ENV"
+
+          scripts/edge/release-notes.sh "$EDGE_TAG" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Check the signing key is available
+        shell: bash
+        env:
+          EDGE_ANDROID_KEYSTORE_BASE64: ${{ secrets.EDGE_ANDROID_KEYSTORE_BASE64 }}
+          EDGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.EDGE_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Before the 30 minutes of build, not after: Gradle would otherwise fail at
+          # the very end, and an unsigned or debug-signed APK must never be uploaded.
+          missing=()
+          [[ -n "$EDGE_ANDROID_KEYSTORE_BASE64" ]] || missing+=(EDGE_ANDROID_KEYSTORE_BASE64)
+          [[ -n "$EDGE_ANDROID_KEYSTORE_PASSWORD" ]] || missing+=(EDGE_ANDROID_KEYSTORE_PASSWORD)
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing repository secret(s): ${missing[*]} — see docs/edge.md, 'Android'"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Make room on the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Disk: a release build wants room for node_modules, the Gradle caches, the NDK
+          # objects and the packaged APK at once. These two are the largest things on the
+          # image we cannot use, and deleting them takes seconds.
+          sudo rm -rf /usr/share/dotnet /opt/ghc
+
+          # Memory: this is what killed the first 1.6.0 run. Hermes compiles the bundle
+          # (~6000 modules) inside the same Gradle invocation as the native build, and the
+          # runner went away mid-task -- no error, just "The operation was canceled",
+          # which is what an OOM-killed runner agent looks like. The Gradle flags below
+          # are the other half of the fix; this widens the runner's 4G swapfile so a spike
+          # pages instead of taking the machine down.
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 12G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+
+          df -h /
+          free -h
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Stamp the Edge build version into the app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same contract as the Linux build: Settings -> About keeps upstream's "App
+          # version" (the host page compares it against the daemon's) and the Edge
+          # number rides on its own constant, from the edge/about-edge-build-row branch.
+          stamp="$APP_PACKAGE_PATH/src/utils/edge-build.ts"
+          if [[ ! -f "$stamp" ]]; then
+            echo "::notice::$stamp is absent (branch retired?) — skipping the Edge build stamp"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const file = 'packages/app/src/utils/edge-build.ts';
+          const version = process.env.EDGE_VERSION;
+          if (!version) throw new Error('EDGE_VERSION env var is missing');
+
+          const placeholder = 'export const EDGE_BUILD_VERSION = "dev";';
+          const source = fs.readFileSync(file, 'utf8');
+          if (!source.includes(placeholder)) {
+            throw new Error(`${file} no longer contains ${placeholder}`);
+          }
+
+          fs.writeFileSync(
+            file,
+            source.replace(placeholder, `export const EDGE_BUILD_VERSION = "${version}";`),
+          );
+          NODE
+          grep -n 'EDGE_BUILD_VERSION' "$stamp"
+
+      - name: Build the app's workspace dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The same script EAS runs after install: @getpaseo/client and friends are
+          # workspace sources, and Metro bundles their dist output.
+          npm run eas-build-post-install --workspace=@getpaseo/app
+
+      - name: Configure push notifications
+        shell: bash
+        env:
+          EDGE_ANDROID_GOOGLE_SERVICES_JSON: ${{ secrets.EDGE_ANDROID_GOOGLE_SERVICES_JSON }}
+          EDGE_EXPO_PROJECT_ID: ${{ vars.EDGE_EXPO_PROJECT_ID }}
+          EDGE_EXPO_OWNER: ${{ vars.EDGE_EXPO_OWNER }}
+          EDGE_EXPO_SLUG: ${{ vars.EDGE_EXPO_SLUG }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$EDGE_ANDROID_GOOGLE_SERVICES_JSON" && -z "$EDGE_EXPO_PROJECT_ID" ]]; then
+            echo "::notice::No Firebase or Expo configuration — building without push notifications"
+            exit 0
+          fi
+          # One without the other is the bad case: the app mints a push token against a
+          # project whose credentials cannot reach it, and every notification is dropped
+          # with nothing logged at either end.
+          if [[ -z "$EDGE_ANDROID_GOOGLE_SERVICES_JSON" || -z "$EDGE_EXPO_PROJECT_ID" ]]; then
+            echo "::error::Push needs both the EDGE_ANDROID_GOOGLE_SERVICES_JSON secret and the EDGE_EXPO_PROJECT_ID variable"
+            exit 1
+          fi
+
+          printf '%s' "$EDGE_ANDROID_GOOGLE_SERVICES_JSON" | base64 -d > "$RUNNER_TEMP/google-services.json"
+          scripts/edge/android-push-config.sh \
+            --google-services "$RUNNER_TEMP/google-services.json" \
+            --project-id "$EDGE_EXPO_PROJECT_ID" \
+            ${EDGE_EXPO_OWNER:+--owner "$EDGE_EXPO_OWNER"} \
+            ${EDGE_EXPO_SLUG:+--slug "$EDGE_EXPO_SLUG"}
+          echo "EDGE_PUSH_CONFIGURED=1" >> "$GITHUB_ENV"
+
+      - name: Prebuild the Android project
+        shell: bash
+        env:
+          CI: "1"
+          APP_VARIANT: production
+        run: |
+          set -euo pipefail
+          cd "$APP_PACKAGE_PATH"
+          # --no-install: npm ci already installed exactly the lockfile, and prebuild's
+          # own install would race it for no gain.
+          npx expo prebuild --platform android --clean --no-install
+
+          # Prebuild silently drops the Firebase file if app.config.js stopped pointing
+          # at it, and the APK would then build clean and never receive a notification.
+          if [[ "${EDGE_PUSH_CONFIGURED:-}" == "1" && ! -f android/app/google-services.json ]]; then
+            echo "::error::Push is configured but prebuild produced no android/app/google-services.json"
+            exit 1
+          fi
+
+      - name: Apply the Edge identity
+        shell: bash
+        run: scripts/edge/android-identity.sh --android-dir "$APP_PACKAGE_PATH/android"
+
+      - name: Decode the signing keystore
+        shell: bash
+        env:
+          EDGE_ANDROID_KEYSTORE_BASE64: ${{ secrets.EDGE_ANDROID_KEYSTORE_BASE64 }}
+          EDGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.EDGE_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$EDGE_ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/edge-android.keystore"
+          # A truncated or mis-pasted secret decodes to something; keytool is what says
+          # whether it is a keystore, and whether it holds the alias the build asks for.
+          keytool -list -keystore "$RUNNER_TEMP/edge-android.keystore" \
+            -storepass "$EDGE_ANDROID_KEYSTORE_PASSWORD" \
+            -alias paseo-edge >/dev/null
+
+      - name: Build the release APK
+        shell: bash
+        env:
+          EDGE_ANDROID_KEYSTORE: ${{ runner.temp }}/edge-android.keystore
+          EDGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.EDGE_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd "$APP_PACKAGE_PATH/android"
+          # The lint exclusions are the ones EAS's production-apk profile passes: a
+          # release lint run costs minutes and fails on upstream's own warnings.
+          #
+          # Serial and daemon-free, which docs/android.md prescribes for source builds and
+          # the first 1.6.0 run proved the hard way: Gradle's own heap was sized correctly
+          # and the runner still died, because parallel workers plus Hermes plus the
+          # native build do not fit in one runner at the same time. EAS avoids this by
+          # buying a larger machine; we take the slower build instead.
+          ./gradlew :app:assembleRelease \
+            -PreactNativeArchitectures="$ANDROID_ABI" \
+            -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease \
+            -x generateReleaseLintModel -x generateReleaseLintVitalModel \
+            --no-daemon --max-workers=1 -Dorg.gradle.parallel=false
+
+      - name: Verify the APK's identity and signature
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$APP_PACKAGE_PATH/android/app/build/outputs/apk/release/app-release.apk"
+          [[ -f "$apk" ]] || { echo "::error::No APK at $apk"; exit 1; }
+
+          build_tools="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n1)"
+          "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          head -n 3 "$RUNNER_TEMP/badging.txt"
+
+          grep -q "package: name='sh.paseo.edge'" "$RUNNER_TEMP/badging.txt" \
+            || { echo "::error::APK is not sh.paseo.edge — the identity patch did not apply"; exit 1; }
+          grep -q "application-label:'Paseo Edge'" "$RUNNER_TEMP/badging.txt" \
+            || { echo "::error::APK is not labelled Paseo Edge"; exit 1; }
+
+          "$build_tools/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
+          cat "$RUNNER_TEMP/certs.txt"
+          # The one failure mode that produces a working, installable, wrong artifact:
+          # the appended signingConfig not taking and Expo's public debug key signing it.
+          if grep -q 'CN=Android Debug' "$RUNNER_TEMP/certs.txt"; then
+            echo "::error::APK is signed with the Android debug key"
+            exit 1
+          fi
+
+          # No version in the name, the same choice the AppImage makes: it keeps
+          # releases/latest/download/paseo-edge-android-arm64.apk pointing at the newest
+          # build forever, which is the only practical way to hand someone an APK for a
+          # phone or to point an updater like Obtainium at it. "arm64" rather than
+          # $ANDROID_ABI's exact spelling is what a phone owner reads.
+          asset="$RUNNER_TEMP/paseo-edge-android-arm64.apk"
+          cp "$apk" "$asset"
+          ls -l "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$EDGE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # The Linux job usually gets here first; this is the case where it failed or
+            # was never run. Racing it is harmless — one of the two loses and the notes
+            # are the same either way.
+            gh release create "$EDGE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Paseo Edge $EDGE_VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              || echo "Release creation raced with the Linux build; continuing."
+          fi
+
+          gh release upload "$EDGE_TAG" "${{ steps.apk.outputs.asset }}" --clobber --repo "${{ github.repository }}"
