@@ -1,6 +1,10 @@
 {
   "$schema": "./node_modules/knip/schema.json",
   "workspaces": {
+    "plugins": {
+      "entry": ["**/index.{server,client}.{ts,tsx}", "**/*.test.ts"],
+      "project": ["**/*.{ts,tsx}"]
+    },
     ".": {
       "entry": ["scripts/**/*.{js,mjs,cjs,ts}"],
       "project": ["scripts/**/*.{js,mjs,cjs,ts}"]
@@ -30,7 +34,7 @@
         "app/**/*.{ts,tsx}",
         "src/**/*.test.{ts,tsx}",
         "src/**/*.e2e.{ts,tsx}",
-        "src/**/*.native.{ts,tsx}",
+        "src/**/*.{native,ios,android,electron}.{ts,tsx}",
         "e2e/**/*.{ts,tsx}",
         "playwright.config.{ts,js}",
         "vitest.config.{ts,js}",
