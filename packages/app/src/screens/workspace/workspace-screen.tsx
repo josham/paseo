@@ -45,6 +45,7 @@ import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
 import { ContainerConfigChangedBanner } from "@/components/container-config-changed-banner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContainerStatusTooltipBody } from "@/components/container-status-tooltip";
+import { useContainerLifecycleProgress } from "@/hooks/use-container-lifecycle-progress";
 import { useToast } from "@/contexts/toast-context";
 import { getOrCreateClientId } from "@/utils/client-id";
 import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
@@ -1016,6 +1017,13 @@ function WorkspaceHeaderTitleBar({
   onOpenUrlInBrowserTab,
 }: WorkspaceHeaderTitleBarProps) {
   const { t } = useTranslation();
+  // Owned here rather than threaded down: this component already has both ids,
+  // and the badge's tooltip is the only thing that shows the line.
+  const containerProgressLine = useContainerLifecycleProgress({
+    client: useHostRuntimeClient(normalizedServerId),
+    workspaceId: normalizedWorkspaceId,
+    enabled: containerStatus !== undefined,
+  });
   return (
     <View style={styles.headerTitleContainer}>
       {isLoading ? (
@@ -1042,6 +1050,7 @@ function WorkspaceHeaderTitleBar({
                 <ContainerStatusTooltipBody
                   containerStatus={containerStatus}
                   containerInfo={containerInfo}
+                  progressLine={containerProgressLine}
                 />
               </TooltipContent>
             </Tooltip>
