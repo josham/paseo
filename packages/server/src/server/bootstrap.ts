@@ -120,6 +120,7 @@ export async function fanOutReconciledWorkspaceUpdates(input: {
 
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
+import { createWorkspaceLauncherResolver } from "./code-navigation/container-launcher.js";
 import {
   createCodeNavigationService,
   createConfigSettingsReader,
@@ -919,12 +920,6 @@ export async function createPaseoDaemon(
     paseoHome: config.paseoHome,
     workspaceRegistry,
   });
-  const codeNavigation = createCodeNavigationService({
-    logger,
-    workspaceRegistry,
-    readSettings: createConfigSettingsReader({ paseoHome: config.paseoHome, logger }),
-    managedProcesses,
-  });
   const github = createGitHubService();
   const workspaceGitService = new WorkspaceGitServiceImpl({
     logger,
@@ -1026,6 +1021,13 @@ export async function createPaseoDaemon(
     }
     return strategy;
   };
+  const codeNavigation = createCodeNavigationService({
+    logger,
+    workspaceRegistry,
+    readSettings: createConfigSettingsReader({ paseoHome: config.paseoHome, logger }),
+    resolveLauncher: createWorkspaceLauncherResolver(resolveWorkspaceLaunchStrategy),
+    managedProcesses,
+  });
 
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const agentManager = new AgentManager({
