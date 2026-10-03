@@ -104,6 +104,13 @@ const DEFAULT_TEXT_MIME_TYPE = "text/plain";
 const FILE_TYPE_SAMPLE_BYTES = 8192;
 export const FILE_EXPLORER_STREAM_CHUNK_BYTES = 256 * 1024;
 export const MAX_EDITABLE_FILE_BYTES = 1024 * 1024;
+/**
+ * Ceiling for a whole-file read served to a client preview. The daemon holds
+ * the file in memory for the length of the transfer, so this bounds daemon
+ * memory per in-flight read. Downloads bypass this: they stream from disk
+ * through the /api/files/download capability-token endpoint.
+ */
+export const MAX_PREVIEWABLE_FILE_BYTES = 32 * 1024 * 1024;
 const READ_FILE_OPEN_FLAGS =
   process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
 const ACCESS_OUTSIDE_WORKSPACE_MESSAGE = "Access outside of workspace is not allowed";
@@ -130,6 +137,38 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
 };
+
+/**
+ * Binary types a client can render. The kind stays "binary" — clients branch on
+ * the mime, never on a widened kind enum, so an old client that doesn't know
+ * the type still parses the response and falls back to "no preview".
+ */
+const BINARY_MIME_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+};
+
+const DEFAULT_BINARY_MIME_TYPE = "application/octet-stream";
+
+function binaryMimeTypeForExtension(ext: string): string {
+  return BINARY_MIME_TYPES[ext] ?? DEFAULT_BINARY_MIME_TYPE;
+}
+
+/** A read the daemon refuses because the file exceeds the in-memory preview bound. */
+export class FileTooLargeError extends Error {
+  constructor(
+    public readonly size: number,
+    public readonly limit: number,
+  ) {
+    super(
+      `File is too large to preview (${formatMegabytes(size)}). The limit is ${formatMegabytes(limit)}.`,
+    );
+    this.name = "FileTooLargeError";
+  }
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface ScopedPathParams {
   root: string;
@@ -267,15 +306,22 @@ export async function readExplorerFileBytes({
       throw new Error("Requested path is not a file");
     }
 
+    if (stats.size > BigInt(MAX_PREVIEWABLE_FILE_BYTES)) {
+      throw new FileTooLargeError(Number(stats.size), MAX_PREVIEWABLE_FILE_BYTES);
+    }
+
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
+    const buffer = await handle.readFile();
     const basePayload = {
       path: normalizeRelativePath({ root, targetPath: filePath.requestedPath }),
-      size: Number(stats.size),
+      // The read, not the stat, is what the client receives. A file that grew
+      // between stat and read would otherwise advertise a length the transfer
+      // never delivers.
+      size: buffer.byteLength,
       modifiedAt: stats.mtime.toISOString(),
       revision: fileRevision(stats),
     };
 
-    const buffer = await handle.readFile();
     if (ext in IMAGE_MIME_TYPES) {
       return {
         ...basePayload,
@@ -286,13 +332,16 @@ export async function readExplorerFileBytes({
       };
     }
 
-    if (isLikelyBinary(buffer) || !isValidUtf8(buffer)) {
+    // Extension wins over content sniffing for declared binary types: a PDF
+    // whose streams happen to be all-ASCII must still reach the client as a
+    // PDF, not as text/plain source.
+    if (ext in BINARY_MIME_TYPES || isLikelyBinary(buffer) || !isValidUtf8(buffer)) {
       return {
         ...basePayload,
         kind: "binary",
         encoding: "binary",
         bytes: buffer,
-        mimeType: "application/octet-stream",
+        mimeType: binaryMimeTypeForExtension(ext),
       };
     }
 
@@ -321,11 +370,19 @@ export async function streamExplorerFile(
       throw new Error("Requested path is not a file");
     }
 
+    if (stats.size > BigInt(MAX_PREVIEWABLE_FILE_BYTES)) {
+      throw new FileTooLargeError(Number(stats.size), MAX_PREVIEWABLE_FILE_BYTES);
+    }
+
     const advertisedSize = Number(stats.size);
     const advertisedRevision = fileRevision(stats);
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
     const isImage = ext in IMAGE_MIME_TYPES;
-    const isBinary = isImage || (await isFileHandleBinary(handle, advertisedSize));
+    // Extension wins over content sniffing for declared binary types, and it is
+    // checked first so a PDF never pays for a full-file binary scan.
+    const isDeclaredBinary = ext in BINARY_MIME_TYPES;
+    const isBinary =
+      isImage || isDeclaredBinary || (await isFileHandleBinary(handle, advertisedSize));
     let kind: ExplorerFileKind = "text";
     let mimeType = textMimeTypeForExtension(ext);
     if (isImage) {
@@ -333,7 +390,7 @@ export async function streamExplorerFile(
       mimeType = IMAGE_MIME_TYPES[ext];
     } else if (isBinary) {
       kind = "binary";
-      mimeType = "application/octet-stream";
+      mimeType = binaryMimeTypeForExtension(ext);
     }
 
     await consume({
@@ -569,10 +626,10 @@ export async function getDownloadableFileInfo({ root, relativePath }: ReadFilePa
     }
 
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
-    let mimeType = "application/octet-stream";
+    let mimeType = binaryMimeTypeForExtension(ext);
     if (ext in IMAGE_MIME_TYPES) {
       mimeType = IMAGE_MIME_TYPES[ext];
-    } else {
+    } else if (!(ext in BINARY_MIME_TYPES)) {
       const sample = Buffer.alloc(FILE_TYPE_SAMPLE_BYTES);
       const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
       const chunk = bytesRead < sample.length ? sample.subarray(0, bytesRead) : sample;
