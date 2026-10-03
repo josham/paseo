@@ -35,6 +35,7 @@ import {
 import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
+import { isReservedAgentLabel } from "@getpaseo/protocol/agent-labels";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
 import { expandUserPath, isSameOrDescendantPath, resolvePathFromBase } from "../../path-utils.js";
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
@@ -61,7 +62,11 @@ import {
   toScheduleSummary,
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
-import { sendPromptToAgent, setupFinishNotification } from "../agent-prompt.js";
+import {
+  sendPromptToAgent,
+  setupFinishNotification,
+  waitForAgentRunStartWithTimeout,
+} from "../agent-prompt.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -517,6 +522,24 @@ function resolveChildAgentCwd(params: {
   return resolvePathFromBase(params.parentCwd, requestedCwd);
 }
 
+/**
+ * Labels under the `paseo.` prefix are daemon-managed control state — parentage
+ * and open-tab tracking. `update_agent` may not write them: parentage is trusted
+ * by cascade archival and by the finish notifications, so an agent that could set
+ * it could adopt any agent and rewrite the relationships the daemon reasons about.
+ *
+ * Creation is deliberately not guarded here. `resolveCreateAgentIntent` applies
+ * the parent label after the caller's own, and strips it outright on the legacy
+ * detached path, so a spoofed value there is already neutralised by design.
+ * Operator surfaces are unaffected either way.
+ */
+function assertNoReservedLabels(labels: Record<string, string> | undefined): void {
+  const reserved = Object.keys(labels ?? {}).filter(isReservedAgentLabel);
+  if (reserved.length > 0) {
+    throw new Error(`Labels are reserved and cannot be set: ${reserved.join(", ")}`);
+  }
+}
+
 const TerminalSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -688,6 +711,34 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
     return expandUserPath(trimmedCwd);
   };
+
+  /**
+   * An agent may not put any agent — itself included — into a mode that runs
+   * without permission prompts unless it already runs that way. The provider
+   * manifest marks those modes `isUnattended` (`bypassPermissions`,
+   * `full-access`, `allow-all`, `full`), and an attended agent reaching one is
+   * a privilege escalation: it turns a session a human is adjudicating into one
+   * that acts unprompted. Operator surfaces are unaffected — this binds only a
+   * caller that is itself an agent.
+   */
+  function assertMayGrantMode(agentId: string, modeId: string | undefined): void {
+    if (!callerAgentId || !modeId) {
+      return;
+    }
+    const target = agentManager.getAgent(agentId);
+    if (!target || !providerSnapshotManager.isUnattendedModeForAgent(target, modeId)) {
+      return;
+    }
+    const caller = resolveCallerAgent();
+    const callerRunsUnattended = caller
+      ? providerSnapshotManager.isUnattendedModeForAgent(caller, caller.currentModeId)
+      : false;
+    if (!callerRunsUnattended) {
+      throw new Error(
+        `Mode '${modeId}' runs without permission prompts and cannot be granted by an agent that does not already run that way.`,
+      );
+    }
+  }
 
   async function resolveTerminalWorkspaceId(resolvedCwd: string): Promise<string> {
     // An agent-spawned terminal belongs to the caller agent's workspace. Only if
@@ -1885,6 +1936,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     }
   }
 
+  const PROMPTED_AGENT_NOTIFICATION_GUIDANCE =
+    "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.";
+
   registerTool(
     "send_agent_prompt",
     {
@@ -1907,9 +1961,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       background = Boolean(callerAgentId),
       notifyOnFinish = Boolean(callerAgentId),
     }) => {
-      const shouldNotifyOnFinish = Boolean(callerAgentId && notifyOnFinish && background);
+      function armFinishNotification(): boolean {
+        if (!callerAgentId || !notifyOnFinish) {
+          return false;
+        }
+        setupFinishNotification({
+          agentManager,
+          agentStorage,
+          childAgentId: agentId,
+          callerAgentId,
+          logger: childLogger,
+        });
+        return true;
+      }
 
-      await sendPromptToAgent({
+      const { disposition } = await sendPromptToAgent({
         agentManager,
         agentStorage,
         agentId,
@@ -1918,27 +1984,24 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         logger: childLogger,
       });
 
-      if (shouldNotifyOnFinish && callerAgentId) {
-        setupFinishNotification({
-          agentManager,
-          agentStorage,
-          childAgentId: agentId,
-          callerAgentId,
-          logger: childLogger,
-        });
-      }
-
       // If not running in background, wait for completion
       if (!background) {
         const result = await waitForAgentWithTimeout(agentManager, agentId, {
           waitForActive: true,
         });
+        // The wait ran out while the agent keeps working, so its result arrives as a
+        // finish notification instead of in this response.
+        const notifying =
+          result.timedOut &&
+          agentManager.getAgent(agentId)?.lifecycle === "running" &&
+          armFinishNotification();
 
         const responseData = {
           success: true,
           status: result.status,
           lastMessage: result.lastMessage,
           permission: sanitizePermissionRequest(result.permission),
+          ...(notifying ? { guidance: PROMPTED_AGENT_NOTIFICATION_GUIDANCE } : {}),
         };
         const validJson = ensureValidJson(responseData);
 
@@ -1949,8 +2012,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         return response;
       }
 
-      // Return immediately if background=true
-      // Re-fetch snapshot since the state may have changed
+      const notifying = armFinishNotification();
+
+      // Return once the provider has accepted the turn, so the status reports it running.
+      if (disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(agentManager, agentId);
+      }
       const currentSnapshot = agentManager.getAgent(agentId);
 
       const responseData = {
@@ -1958,12 +2025,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         status: currentSnapshot?.lifecycle ?? "idle",
         lastMessage: null,
         permission: null,
-        ...(shouldNotifyOnFinish
-          ? {
-              guidance:
-                "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.",
-            }
-          : {}),
+        ...(notifying ? { guidance: PROMPTED_AGENT_NOTIFICATION_GUIDANCE } : {}),
       };
       const validJson = ensureValidJson(responseData);
 
@@ -2176,6 +2238,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, name, labels, settings }) => {
+      assertNoReservedLabels(labels);
+      assertMayGrantMode(agentId, settings?.modeId);
       if (settings?.modeId !== undefined) {
         await agentManager.setAgentMode(agentId, settings.modeId);
       }
@@ -3107,6 +3171,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, modeId }) => {
+      assertMayGrantMode(agentId, modeId);
       const result = await setAgentModeCommand({ agentManager }, { agentId, modeId });
       return {
         content: [],
