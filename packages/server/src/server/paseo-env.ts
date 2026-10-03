@@ -10,6 +10,23 @@ const RUNTIME_CONTROL_ENV_KEYS = [
   "ESBUILD_BINARY_PATH",
 ] as const;
 
+/**
+ * Daemon credentials that must not reach a spawned process by inheritance.
+ *
+ * The daemon commonly receives these from a service manager's environment
+ * (a systemd `EnvironmentFile`, say), and every agent and terminal it spawns
+ * would otherwise inherit them. `PASEO_PASSWORD` in particular authenticates
+ * the daemon's own control plane, so an agent that reads its environment can
+ * drive the daemon regardless of which Paseo tools it was granted — and can
+ * exfiltrate a credential that is remotely usable whenever the daemon listens
+ * off loopback.
+ *
+ * These are stripped from the inherited base only. An explicit overlay still
+ * wins, so a caller that deliberately hands a secret to a child process keeps
+ * working.
+ */
+const INHERITED_SECRET_ENV_KEYS = ["PASEO_PASSWORD", "PASEO_HUB_API_KEY"] as const;
+
 export type PaseoNodeEnv = "development" | "production" | "test";
 export type ProcessEnvRecord = Record<string, string | undefined>;
 export type ExternalProcessEnv = NodeJS.ProcessEnv & Record<string, string>;
@@ -22,7 +39,11 @@ function buildExternalProcessEnv(
   baseEnv: ProcessEnvRecord,
   overlays: ProcessEnvRecord[],
 ): ExternalProcessEnv {
-  const sanitized = Object.assign({}, baseEnv, ...overlays);
+  const inherited: ProcessEnvRecord = { ...baseEnv };
+  for (const key of INHERITED_SECRET_ENV_KEYS) {
+    delete inherited[key];
+  }
+  const sanitized = Object.assign(inherited, ...overlays);
   for (const key of RUNTIME_CONTROL_ENV_KEYS) {
     delete sanitized[key];
   }
