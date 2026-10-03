@@ -299,3 +299,37 @@ describe("matchRanges", () => {
     expect(matchRanges("", "anything", { tier: 0, offset: 0 })).toEqual([]);
   });
 });
+
+describe("subsequenceAcrossWords", () => {
+  it("keeps runs inside one word by default", () => {
+    // The guarantee #4945 added: an abbreviation may not stitch separate words
+    // together, so a list that preselects its first row stays safe to Enter on.
+    expect(scoreMatch("labdes", "Label as Design")).toBeNull();
+    expect(scoreMatch("prsrtst", "run the parser tests")).toBeNull();
+  });
+
+  it("lets a run span whitespace when a caller opts in", () => {
+    expect(
+      scoreMatch("prsrtst", "run the parser tests", { subsequenceAcrossWords: true }),
+    ).not.toBeNull();
+    expect(
+      scoreMatch("labdes", "Label as Design", { subsequenceAcrossWords: true }),
+    ).not.toBeNull();
+  });
+
+  it("still requires the characters to appear in order", () => {
+    expect(
+      scoreMatch("tstprsr", "run the parser tests", { subsequenceAcrossWords: true }),
+    ).toBeNull();
+  });
+
+  it("marks the characters it actually walked, across words", () => {
+    const text = "run the parser tests";
+    const score = scoreMatch("prsrtst", text, { subsequenceAcrossWords: true });
+    expect(score).not.toBeNull();
+    const marked = matchRanges("prsrtst", text, score!)
+      .map((range) => text.slice(range.start, range.start + range.length))
+      .join("");
+    expect(marked.replace(/\s/gu, "")).toBe("prsrtst");
+  });
+});
