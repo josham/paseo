@@ -475,6 +475,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     revertFiles: inner.revertFiles?.bind(inner),
     revertBoth: inner.revertBoth?.bind(inner),
     tryHandleOutOfBand: inner.tryHandleOutOfBand?.bind(inner),
+    stopRuntime: inner.stopRuntime?.bind(inner),
   } satisfies ForwardedAgentSession;
 }
 
@@ -598,13 +599,15 @@ function wrapClientProvider(
         }
       : undefined,
     archiveNativeSession: archiveNativeSession
-      ? async (handle) => await archiveNativeSession({ ...handle, provider: inner.provider })
+      ? async (handle, options) =>
+          await archiveNativeSession({ ...handle, provider: inner.provider }, options)
       : undefined,
     unarchiveNativeSession: unarchiveNativeSession
-      ? async (handle) => await unarchiveNativeSession({ ...handle, provider: inner.provider })
+      ? async (handle, options) =>
+          await unarchiveNativeSession({ ...handle, provider: inner.provider }, options)
       : undefined,
     getCatalogCacheKey: inner.getCatalogCacheKey?.bind(inner),
-    isAvailable: (signal, options) => inner.isAvailable(signal, options),
+    isAvailable: (options) => inner.isAvailable(options),
     getDiagnostic: inner.getDiagnostic?.bind(inner),
   };
 }

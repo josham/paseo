@@ -453,6 +453,7 @@ function buildResumeStartInput(input: {
       input.resumeConfig.config.systemPrompt,
       input.resumeConfig.config.daemonAppendSystemPrompt,
     ),
+    launchStrategy: input.launchContext?.launchStrategy,
   };
 }
 
@@ -470,6 +471,7 @@ function withOmpCapabilities(): AgentCapabilityFlags {
     ...OMP_CORE_CAPABILITIES,
     supportsMcpServers: true,
     supportsNativePaseoTools: true,
+    supportsIsolatedLaunch: true,
   };
 }
 
@@ -2277,6 +2279,7 @@ export class OmpAgentClient implements AgentClient {
       extraArgs: launchMode.extraArgs,
       systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
       env: launchContext?.env,
+      launchStrategy: launchContext?.launchStrategy,
     };
     const runtimeSession = await this.resolveRuntime(config.providerOptions).startSession(
       startInput,
@@ -2439,6 +2442,8 @@ export class OmpAgentClient implements AgentClient {
       await runProviderRefreshActivity(context, "runtime.start", async () => {
         runtimeSession = await this.resolveRuntime(options.providerOptions).startSession({
           cwd: options.scope === "global" ? homedir() : options.cwd,
+          // A global catalog is the host's; only a workspace has a container.
+          launchStrategy: options.scope === "workspace" ? options.launchStrategy : undefined,
           protocolMode: "rpc-ui",
           modeId: launchMode.modeId,
           extraArgs: launchMode.extraArgs,
@@ -2481,6 +2486,8 @@ export class OmpAgentClient implements AgentClient {
       sessionDir: resolveOmpProviderOptions(context.config.providerOptions).runtimeOptions
         .sessionDir,
       runtimeSettings: this.runtimeSettings,
+      // The transcript being imported lives wherever the agent wrote it.
+      launchStrategy: context.launchContext?.launchStrategy,
     };
     const importConfig = await readOmpImportSessionConfig(
       input.providerHandleId,

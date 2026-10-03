@@ -36,7 +36,7 @@ import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop
 import { type GestureType } from "react-native-gesture-handler";
 import { WorkspaceRenameModal } from "@/components/workspace-rename-modal";
 import { useWorkspaceClipboardActions } from "@/hooks/use-workspace-clipboard-actions";
-import { ExternalLink, Settings, MoreVertical, Plus, Trash2 } from "lucide-react-native";
+import { Container, ExternalLink, Settings, MoreVertical, Plus, Trash2 } from "lucide-react-native";
 import { NestableScrollContainer } from "react-native-draggable-flatlist";
 import { DraggableList, type DraggableRenderItemInfo } from "./draggable-list";
 import type { DraggableListDragHandleProps } from "./draggable-list.types";
@@ -121,6 +121,7 @@ import {
 } from "@/components/sidebar/workspace-trailing";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContainerStatusTooltipBody } from "@/components/container-status-tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
@@ -162,12 +163,14 @@ const ThemedExternalLink = withUnistyles(ExternalLink);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedMoreVertical = withUnistyles(MoreVertical);
-const ThemedTrash2 = withUnistyles(Trash2);
 const ThemedSettings = withUnistyles(Settings);
+const ThemedTrash2 = withUnistyles(Trash2);
+const ThemedContainer = withUnistyles(Container);
 
 const foregroundColorMapping = (theme: Theme) => ({
   color: theme.colors.foreground,
 });
+const greenColorMapping = (theme: Theme) => ({ color: theme.colors.palette.green[500] });
 const foregroundMutedColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
@@ -663,6 +666,28 @@ function WorkspaceRowRightGroup({
 
   return (
     <>
+      {workspace.containerStatus ? (
+        <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+          <TooltipTrigger asChild>
+            <View testID={`sidebar-workspace-container-icon-${workspace.workspaceKey}`}>
+              <ThemedContainer
+                size={12}
+                uniProps={
+                  workspace.containerStatus === "running"
+                    ? greenColorMapping
+                    : foregroundMutedColorMapping
+                }
+              />
+            </View>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="center" offset={8} maxWidth={320}>
+            <ContainerStatusTooltipBody
+              containerStatus={workspace.containerStatus}
+              containerInfo={workspace.containerInfo}
+            />
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       {isCreating ? (
         <Text style={styles.workspaceCreatingText}>{t("sidebar.workspace.status.creating")}</Text>
       ) : null}
