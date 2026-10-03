@@ -18,14 +18,18 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
 import {
-  PiProviderParamsSchema,
+  PiProviderOptionsSchema,
   PiRpcAgentClient,
   PiRpcAgentSession,
   transformPiModels,
 } from "./agent.js";
 import { FakePi } from "./test-utils/fake-pi.js";
+import { createPiExtensionHost } from "./extensions/index.js";
+import { PiExtensionHost } from "./extensions/host.js";
 import type { PiModel, PiThinkingLevel } from "./rpc-types.js";
 import type { PiUsagePollScheduler } from "./usage-poller.js";
+import { FakeIsolatedLaunchStrategy } from "../../../devcontainer/test-utils/fake-isolated-strategy.js";
+import { isPlatform } from "../../../../test-utils/platform.js";
 
 const ONE_BY_ONE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -54,8 +58,8 @@ interface PiThinkingCatalogCase {
 }
 
 test("Pi RPC timeout defaults to 60 seconds and accepts an override", () => {
-  expect(PiProviderParamsSchema.parse({}).rpcTimeoutMs).toBe(60_000);
-  expect(PiProviderParamsSchema.parse({ rpcTimeoutMs: 90_000 }).rpcTimeoutMs).toBe(90_000);
+  expect(PiProviderOptionsSchema.parse({}).rpcTimeoutMs).toBe(60_000);
+  expect(PiProviderOptionsSchema.parse({ rpcTimeoutMs: 90_000 }).rpcTimeoutMs).toBe(90_000);
 });
 
 function createClient(
@@ -120,21 +124,70 @@ function readUtf8File(pathname: string): string {
 
 type PaseoExtensionListener = (event: unknown, context?: unknown) => unknown;
 
+interface PiSessionEntry {
+  type: "message";
+  id: string;
+  parentId: string | null;
+  message: { role: string; content: unknown };
+}
+
+function piUserEntry(input: { id: string; parentId: string | null; text: string }): PiSessionEntry {
+  return {
+    type: "message",
+    id: input.id,
+    parentId: input.parentId,
+    message: { role: "user", content: input.text },
+  };
+}
+
+function piAssistantEntry(id: string, parentId: string): PiSessionEntry {
+  return { type: "message", id, parentId, message: { role: "assistant", content: [] } };
+}
+
+// Pi's context path: the entries from the root to the leaf.
+function piBranchTo(entries: PiSessionEntry[], leafId: string): PiSessionEntry[] {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const branch: PiSessionEntry[] = [];
+  for (let entry = byId.get(leafId); entry; entry = byId.get(entry.parentId ?? "")) {
+    branch.unshift(entry);
+  }
+  return branch;
+}
+
+function parseEntryCapture(notification: string): unknown {
+  const prefix = "PASEO_ENTRY_CAPTURE ";
+  expect(notification.startsWith(prefix)).toBe(true);
+  return JSON.parse(notification.slice(prefix.length));
+}
+
 async function loadPaseoExtensionListeners(
   extensionPath: string,
+  registerMcpServer: (name: string, config: unknown) => void = () => undefined,
 ): Promise<Map<string, PaseoExtensionListener>> {
   const listeners = new Map<string, PaseoExtensionListener>();
   const extension = (await import(pathToFileURL(extensionPath).href)) as {
     default: (piApi: {
       on: (event: string, listener: PaseoExtensionListener) => void;
+      events: { on: () => void };
       registerCommand: () => void;
+      registerMcpServer: (name: string, config: unknown) => void;
     }) => void;
   };
   extension.default({
     on: (event, listener) => listeners.set(event, listener),
+    events: { on: () => undefined },
     registerCommand: () => undefined,
+    registerMcpServer,
   });
   return listeners;
+}
+
+async function readRegisteredMcpServers(extensionPath: string): Promise<Record<string, unknown>> {
+  const servers: Record<string, unknown> = {};
+  await loadPaseoExtensionListeners(extensionPath, (name, config) => {
+    servers[name] = config;
+  });
+  return servers;
 }
 
 async function applyPaseoExtensionSystemPrompt(
@@ -381,6 +434,103 @@ class SessionEvents {
 }
 
 describe("PiRpcAgentSession", () => {
+  test("completes a turn and answers a dialog when an adapter throws", async () => {
+    const { pi, session, events } = await createSession();
+    Object.assign(session, {
+      extensionHost: createPiExtensionHost(undefined, [
+        {
+          id: "throwing-test-adapter",
+          createSession: () => ({
+            mapToolCall: () => {
+              throw new Error("tool failed");
+            },
+            onToolStart: () => {
+              throw new Error("start failed");
+            },
+            onToolEnd: () => {
+              throw new Error("end failed");
+            },
+            mapDialog: () => {
+              throw new Error("dialog failed");
+            },
+            respondToPermission: () => {
+              throw new Error("response failed");
+            },
+          }),
+        },
+      ]),
+    });
+    const fakeSession = pi.latestSession();
+    await session.startTurn("run");
+    fakeSession.emit({
+      type: "tool_execution_start",
+      toolCallId: "x",
+      toolName: "other",
+      args: {},
+    });
+    fakeSession.emit({
+      type: "tool_execution_end",
+      toolCallId: "x",
+      toolName: "other",
+      result: { content: [{ type: "text", text: "ok" }] },
+      isError: false,
+    });
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "ui-1",
+      method: "select",
+      title: "Pick",
+      options: ["A", "B"],
+    });
+    const permission = await events.nextPermissionRequest();
+    expect(permission.request.kind).toBe("question");
+    await session.respondToPermission("ui-1", {
+      behavior: "allow",
+      updatedInput: { answers: { Response: "B" } },
+    });
+    expect(fakeSession.extensionUiResponses).toEqual([{ id: "ui-1", response: { value: "B" } }]);
+    fakeSession.finishTurn();
+    await events.nextTurnCompletion();
+    expect(events.timelineItems()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "other",
+          status: "completed",
+          detail: expect.objectContaining({ type: "unknown" }),
+        }),
+      ]),
+    );
+  });
+
+  test("close resolves after rejected child hydration", async () => {
+    const { pi, session } = await createSession();
+    Object.assign(session, {
+      extensionHost: new PiExtensionHost(
+        [
+          {
+            id: "child-test",
+            createSession: () => ({
+              mapToolCall: () => ({ childSessions: [{ id: "child-1", file: "unused" }] }),
+            }),
+          },
+        ],
+        undefined,
+        2 * 1024 * 1024,
+        async () => {
+          throw new Error("read failed");
+        },
+      ),
+    });
+    await session.startTurn("run");
+    pi.latestSession().emit({
+      type: "tool_execution_start",
+      toolCallId: "x",
+      toolName: "other",
+      args: {},
+    });
+    await expect(session.close()).resolves.toBeUndefined();
+  });
   test("bridges Pi RPC select extension UI requests through question permissions", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -724,61 +874,6 @@ describe("PiRpcAgentSession", () => {
     ]);
   });
 
-  test("streams Pi task calls as sub-agent cards with lifecycle status", async () => {
-    const { pi, session, events } = await createSession();
-    const fakeSession = pi.latestSession();
-
-    await session.startTurn("delegate this");
-    fakeSession.emit({
-      type: "tool_execution_start",
-      toolCallId: "task-1",
-      toolName: "task",
-      args: {
-        agent: "explore",
-        task: "Trace the Pi provider tool mapper",
-      },
-    });
-    fakeSession.emit({
-      type: "tool_execution_end",
-      toolCallId: "task-1",
-      toolName: "task",
-      result: { content: [{ type: "text", text: "Found the mapper." }] },
-      isError: false,
-    });
-    fakeSession.finishTurn();
-
-    await events.nextTurnCompletion();
-
-    expect(events.timelineItems()).toEqual([
-      {
-        type: "tool_call",
-        callId: "task-1",
-        name: "task",
-        status: "running",
-        detail: {
-          type: "sub_agent",
-          subAgentType: "explore",
-          description: "Trace the Pi provider tool mapper",
-          log: "",
-        },
-        error: null,
-      },
-      {
-        type: "tool_call",
-        callId: "task-1",
-        name: "task",
-        status: "completed",
-        detail: {
-          type: "sub_agent",
-          subAgentType: "explore",
-          description: "Trace the Pi provider tool mapper",
-          log: "Found the mapper.",
-        },
-        error: null,
-      },
-    ]);
-  });
-
   test("keeps one generated message id when Pi omits message start and response id", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -921,7 +1016,8 @@ describe("PiRpcAgentSession", () => {
     })) as PiRpcAgentSession;
     const events = new SessionEvents(session);
     const fakeSession = pi.latestSession();
-    fakeSession.capturedUserEntries = [{ id: "entry-old", parentId: null, text: "old prompt" }];
+    fakeSession.treeUserEntries = [{ id: "entry-old", parentId: null, text: "old prompt" }];
+    fakeSession.contextUserEntries = fakeSession.treeUserEntries;
 
     await session.startTurn("new prompt", { clientMessageId: "client-new" });
     fakeSession.finishSubmittedUserMessage({
@@ -1509,6 +1605,47 @@ describe("PiRpcAgentSession", () => {
     ]);
 
     await session.close();
+  });
+
+  test("captures the session's user entries apart from the ones on the current branch", async () => {
+    const pi = new FakePi();
+    const session = await createClient(pi).createSession(createConfig());
+    onTestFinished(() => session.close());
+    const listeners = await loadPaseoExtensionListeners(pi.recordedLaunches[0]!.extensionPaths[0]!);
+    // "abandoned" was rewound; "two" was sent from the same parent afterwards.
+    const entries = [
+      piUserEntry({ id: "one", parentId: null, text: "first" }),
+      piAssistantEntry("one-reply", "one"),
+      piUserEntry({ id: "abandoned", parentId: "one-reply", text: "rewound away" }),
+      piAssistantEntry("abandoned-reply", "abandoned"),
+      piUserEntry({ id: "two", parentId: "one-reply", text: "second" }),
+      piAssistantEntry("two-reply", "two"),
+    ];
+    const notifications: string[] = [];
+    const context = {
+      sessionManager: {
+        getEntries: () => entries,
+        buildContextEntries: () => piBranchTo(entries, "two-reply"),
+      },
+      ui: { notify: (message: string) => notifications.push(message) },
+    };
+
+    await listeners.get("session_start")?.({}, context);
+
+    expect(notifications.map(parseEntryCapture)).toEqual([
+      {
+        reason: "session_start",
+        treeEntries: [
+          { id: "one", parentId: null, text: "first" },
+          { id: "abandoned", parentId: "one-reply", text: "rewound away" },
+          { id: "two", parentId: "one-reply", text: "second" },
+        ],
+        contextEntries: [
+          { id: "one", parentId: null, text: "first" },
+          { id: "two", parentId: "one-reply", text: "second" },
+        ],
+      },
+    ]);
   });
 
   test("appends agent and daemon prompts after Pi's discovered system prompt", async () => {
@@ -2330,10 +2467,11 @@ describe("PiRpcAgentClient", () => {
     const client = new PiRpcAgentClient({
       logger: pino({ level: "silent" }),
       runtime: new FakePi(),
-      providerParams: { sessionDir: sessionsDir },
     });
 
-    await expect(client.listImportableSessions({ cwd })).resolves.toEqual([
+    await expect(
+      client.listImportableSessions({ cwd, providerOptions: { sessionDir: sessionsDir } }),
+    ).resolves.toEqual([
       {
         providerHandleId: sessionFile,
         cwd,
@@ -2381,7 +2519,9 @@ describe("PiRpcAgentClient", () => {
       },
     });
 
-    await expect(client.listImportableSessions({ cwd })).resolves.toMatchObject([
+    await expect(
+      client.listImportableSessions({ cwd, providerOptions: { sessionDir: sessionsDir } }),
+    ).resolves.toMatchObject([
       {
         providerHandleId: sessionFile,
         cwd,
@@ -2437,7 +2577,6 @@ describe("PiRpcAgentClient", () => {
     const client = new PiRpcAgentClient({
       logger: pino({ level: "silent" }),
       runtime: pi,
-      providerParams: { sessionDir: sessionsDir },
     });
 
     const imported = await client.importSession(
@@ -2503,6 +2642,26 @@ describe("PiRpcAgentClient", () => {
       modes: [],
     });
     expect(pi.recordedLaunches[0]).toMatchObject({ cwd: "/workspace/with-extension" });
+  });
+
+  test("marks the model Pi resolves from its own settings as the catalog default", async () => {
+    const pi = new FakePi();
+    const unconfigured = { provider: "openai", id: "gpt-4", name: "GPT-4", reasoning: false };
+    const configured = { provider: "zai", id: "glm-5.3", name: "GLM-5.3", reasoning: true };
+    pi.queueSessionSetup((session) => {
+      session.models = [unconfigured, configured];
+      session.state = { ...session.state, model: configured };
+    });
+
+    const catalog = await createClient(pi).fetchCatalog({
+      scope: "workspace",
+      cwd: "/workspace/project",
+      force: false,
+    });
+
+    expect(catalog.models.filter((model) => model.isDefault).map((model) => model.id)).toEqual([
+      "zai/glm-5.3",
+    ]);
   });
 
   test("honors per-model Pi thinking maps and clamps the catalog default upward", async () => {
@@ -2836,10 +2995,11 @@ describe("PiRpcAgentClient", () => {
 
   test("rewinds conversation through the Pi tree navigation bridge", async () => {
     const { pi, session, events } = await createSession();
-    pi.latestSession().capturedUserEntries = [
+    pi.latestSession().treeUserEntries = [
       { id: "entry-1", parentId: null, text: "first prompt" },
       { id: "entry-3", parentId: "entry-2", text: "second prompt" },
     ];
+    pi.latestSession().contextUserEntries = pi.latestSession().treeUserEntries;
 
     await session.startTurn("first prompt");
     pi.latestSession().finishTurn({ role: "assistant", content: [] });
@@ -2853,6 +3013,23 @@ describe("PiRpcAgentClient", () => {
       supportsRewindBoth: false,
     });
     expect(pi.latestSession().treeNavigationRequests).toEqual(["entry-1"]);
+  });
+
+  test("rewinds a row whose Pi entry compaction summarized away", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    // Compaction summarized entry-1, so the replayed branch starts at entry-3.
+    fakeSession.treeUserEntries = [
+      { id: "entry-1", parentId: null, text: "first prompt" },
+      { id: "entry-3", parentId: "entry-2", text: "second prompt" },
+    ];
+    fakeSession.contextUserEntries = [
+      { id: "entry-3", parentId: "entry-2", text: "second prompt" },
+    ];
+
+    await session.revertConversation?.({ messageId: "entry-1" });
+
+    expect(fakeSession.treeNavigationRequests).toEqual(["entry-1"]);
   });
 
   test("injects MCP servers without replacing the Pi global MCP config", async () => {
@@ -2967,6 +3144,102 @@ describe("PiRpcAgentClient", () => {
     ).rejects.toThrow(`Failed to parse Pi MCP config: ${configPath}`);
   });
 
+  test("registers MCP servers through Pi's built-in MCP when pi-mcp-adapter is not loaded", async () => {
+    const pi = new FakePi();
+    pi.queueCommands([
+      {
+        name: "mcp",
+        source: "extension",
+        sourceInfo: { path: "builtin:mcp", source: "builtin" },
+      },
+    ]);
+    const session = await createClient(pi).createSession(
+      createConfig({
+        mcpServers: {
+          paseo: {
+            type: "http",
+            url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+            headers: { Authorization: "Bearer token" },
+          },
+          local: { type: "stdio", command: "node", args: ["server.js"], env: { KEY: "`${x}`" } },
+        },
+      }),
+    );
+
+    expect(session.capabilities.supportsMcpServers).toBe(true);
+    const actualLaunch = pi.recordedLaunches[1]!;
+    expect(actualLaunch.argv).not.toContain("--mcp-config");
+    const extensionPath = actualLaunch.extensionPaths[0]!;
+    expect(await readRegisteredMcpServers(extensionPath)).toEqual({
+      paseo: {
+        url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+        headers: { Authorization: "Bearer token" },
+      },
+      local: { command: "node", args: ["server.js"], env: { KEY: "`${x}`" } },
+    });
+
+    await session.close();
+    expect(existsSync(extensionPath)).toBe(false);
+  });
+
+  test("registers the resumed session's MCP servers through Pi's built-in MCP", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const original = await client.createSession(createConfig());
+    const persistence = original.describePersistence()!;
+    await original.close();
+
+    pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
+    const session = await client.resumeSession(persistence, {
+      mcpServers: {
+        paseo: { type: "http", url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2" },
+      },
+    });
+    onTestFinished(() => session.close());
+
+    expect(session.capabilities.supportsMcpServers).toBe(true);
+    const actualLaunch = pi.recordedLaunches.at(-1)!;
+    expect(actualLaunch.session).toBe(persistence.nativeHandle);
+    expect(actualLaunch.argv).not.toContain("--mcp-config");
+    expect(await readRegisteredMcpServers(actualLaunch.extensionPaths[0]!)).toEqual({
+      paseo: { url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2" },
+    });
+  });
+
+  test("uses pi-mcp-adapter when it replaces Pi's built-in MCP", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "paseo-pi-agent-"));
+    onTestFinished(() => rmSync(agentDir, { recursive: true, force: true }));
+    const pi = new FakePi();
+    pi.queueCommands([
+      { name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } },
+      { name: "mcp:1", source: "extension", sourceInfo: { source: "npm:pi-mcp-adapter" } },
+    ]);
+    const session = await createClient(pi).createSession(
+      createConfig({
+        mcpServers: { paseo: { type: "http", url: "http://127.0.0.1:6767/mcp/agents" } },
+      }),
+      { env: { PI_CODING_AGENT_DIR: agentDir } },
+    );
+    onTestFinished(() => session.close());
+
+    const actualLaunch = pi.recordedLaunches[1]!;
+    expect(actualLaunch.argv).toContain("--mcp-config");
+    expect(await readRegisteredMcpServers(actualLaunch.extensionPaths[0]!)).toEqual({});
+  });
+
+  test.each([
+    { name: "legacy", config: { type: "sse" as const, url: "https://example.com/sse" } },
+    { name: "foo.bar", config: { type: "http" as const, url: "https://example.com/mcp" } },
+  ])("rejects $name, which Pi's built-in MCP cannot register", async ({ name, config }) => {
+    const pi = new FakePi();
+    pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
+
+    await expect(
+      createClient(pi).createSession(createConfig({ mcpServers: { [name]: config } })),
+    ).rejects.toThrow(name);
+    expect(pi.recordedLaunches).toHaveLength(1);
+  });
+
   test("does not pass MCP config when pi-mcp-adapter is not loaded", async () => {
     const pi = new FakePi();
     pi.queueCommands([]);
@@ -3027,5 +3300,149 @@ describe("transformPiModels", () => {
         description: "openrouter/OpenAI: GPT-5.5",
       },
     ]);
+  });
+});
+
+// The fake strategy stands in for a container by running the same POSIX
+// commands on the host, so it needs a host that has them.
+describe.skipIf(isPlatform("win32"))("PiRpcAgentClient in a container", () => {
+  function createContainerHome(): string {
+    const home = mkdtempSync(path.join(tmpdir(), "paseo-pi-container-home-"));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    return home;
+  }
+
+  function createStrategy(options: { home: string; hostCwd: string; missing?: string[] }) {
+    return new FakeIsolatedLaunchStrategy({
+      hostWorkspaceFolder: options.hostCwd,
+      remoteWorkspaceFolder: "/workspaces/project",
+      environmentEnv: { HOME: options.home },
+      ...(options.missing ? { missingExecutables: options.missing } : {}),
+    });
+  }
+
+  test("starts Pi in the container rather than on the host", async () => {
+    const hostCwd = mkdtempSync(path.join(tmpdir(), "paseo-pi-host-cwd-"));
+    onTestFinished(() => rmSync(hostCwd, { recursive: true, force: true }));
+    const strategy = createStrategy({ home: createContainerHome(), hostCwd });
+    const pi = new FakePi();
+    const client = createClient(pi);
+
+    const session = await client.createSession(createConfig({ cwd: hostCwd }), {
+      launchStrategy: strategy,
+    });
+    onTestFinished(() => session.close());
+
+    expect(pi.recordedInputs[0]?.launchStrategy).toBe(strategy);
+  });
+
+  test("puts the Paseo extension where the container's Pi can open it", async () => {
+    // The extension carries the system prompt, and Pi opens the path itself.
+    // Written with node:fs it would land in the daemon's /tmp, which the
+    // container cannot see.
+    const hostCwd = mkdtempSync(path.join(tmpdir(), "paseo-pi-host-cwd-"));
+    onTestFinished(() => rmSync(hostCwd, { recursive: true, force: true }));
+    const strategy = createStrategy({ home: createContainerHome(), hostCwd });
+    const pi = new FakePi();
+    const client = createClient(pi);
+
+    const session = await client.createSession(
+      createConfig({ cwd: hostCwd, systemPrompt: "be brief" }),
+      { launchStrategy: strategy },
+    );
+    onTestFinished(() => session.close());
+
+    const extensionPath = pi.recordedLaunches[0]?.extensionPaths?.[0];
+    expect(extensionPath).toEqual(expect.any(String));
+    const wroteThroughContainer = strategy.recordedSpawns.some(
+      (call) => call.command === "sh" && call.args[1]?.includes(extensionPath!),
+    );
+    expect(wroteThroughContainer).toBe(true);
+    expect(readUtf8File(extensionPath!)).toContain("be brief");
+  });
+
+  test("merges the container's own global MCP config, not the daemon's", async () => {
+    const home = createContainerHome();
+    const hostCwd = mkdtempSync(path.join(tmpdir(), "paseo-pi-host-cwd-"));
+    onTestFinished(() => rmSync(hostCwd, { recursive: true, force: true }));
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".pi", "agent", "mcp.json"),
+      JSON.stringify({ mcpServers: { inContainer: { url: "https://example.com/in-container" } } }),
+    );
+    const strategy = createStrategy({ home, hostCwd });
+    const pi = new FakePi();
+    pi.queueCommands([
+      {
+        name: "mcp",
+        description: "Show MCP server status",
+        source: "extension",
+        sourceInfo: { source: "npm:pi-mcp-adapter" },
+      },
+    ]);
+    const client = createClient(pi);
+
+    const session = await client.createSession(
+      createConfig({
+        cwd: hostCwd,
+        mcpServers: { paseo: { type: "http", url: "http://10.0.2.2:6767/mcp/agents" } },
+      }),
+      { launchStrategy: strategy },
+    );
+    onTestFinished(() => session.close());
+
+    const configPath = pi.recordedLaunches[1]?.mcpConfigPath;
+    expect(configPath).toEqual(expect.any(String));
+    const written = JSON.parse(readUtf8File(configPath!)) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(Object.keys(written.mcpServers).sort()).toEqual(["inContainer", "paseo"]);
+  });
+
+  test("lists the container's sessions, keyed by the container's cwd", async () => {
+    // Previously this returned nothing at all for a container workspace.
+    const home = createContainerHome();
+    const hostCwd = mkdtempSync(path.join(tmpdir(), "paseo-pi-host-cwd-"));
+    onTestFinished(() => rmSync(hostCwd, { recursive: true, force: true }));
+    const sessionsDir = path.join(home, ".pi", "agent", "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionsDir, "session-1.jsonl"),
+      `${JSON.stringify({
+        type: "session",
+        id: "session-1",
+        cwd: "/workspaces/project",
+        timestamp: "2026-01-01T00:00:00.000Z",
+      })}\n${JSON.stringify({
+        type: "message",
+        timestamp: "2026-01-01T00:01:00.000Z",
+        message: { role: "user", content: "inside the container" },
+      })}\n`,
+    );
+    const strategy = createStrategy({ home, hostCwd });
+    const client = createClient();
+
+    const sessions = await client.listImportableSessions({
+      cwd: hostCwd,
+      launchStrategy: strategy,
+    });
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].cwd).toBe("/workspaces/project");
+    expect(sessions[0].lastPromptPreview).toBe("inside the container");
+  });
+
+  test("reports availability from the container's PATH", async () => {
+    const hostCwd = mkdtempSync(path.join(tmpdir(), "paseo-pi-host-cwd-"));
+    onTestFinished(() => rmSync(hostCwd, { recursive: true, force: true }));
+    const home = createContainerHome();
+    const client = createClient();
+
+    const present = createStrategy({ home, hostCwd });
+    expect(await client.isAvailable({ launchStrategy: present })).toBe(true);
+    expect(present.resolvedExecutables).toEqual(["pi"]);
+
+    const absent = createStrategy({ home, hostCwd, missing: ["pi"] });
+    expect(await client.isAvailable({ launchStrategy: absent })).toBe(false);
   });
 });

@@ -31,6 +31,12 @@ import { runWithGitCommandPriority } from "../utils/run-git-command.js";
 
 export interface CreatePaseoWorktreeInput extends CreateWorktreeCoreInput {
   workspaceId?: string;
+  /**
+   * The container backend this workspace was created with, or null for Host.
+   * Recorded on the workspace so a worktree created with a container selected
+   * actually gets one — the directory path already did this.
+   */
+  containerBackend?: string | null;
   projectId?: string;
   title?: string;
 }
@@ -112,6 +118,7 @@ async function createPaseoWorktreeWithPriority(
             },
           }
         : {}),
+      ...(input.containerBackend === undefined ? {} : { containerBackend: input.containerBackend }),
     });
 
     deps.github.invalidate({ cwd: createdWorktree.worktree.worktreePath });

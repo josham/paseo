@@ -52,6 +52,8 @@ const execFileAsync = promisify(execFile);
 const READ_ONLY_GIT_ENV = {
   GIT_OPTIONAL_LOCKS: "0",
 } as const;
+/** Shown by `git worktree list` when someone wonders why it cannot be pruned. */
+const PASEO_WORKTREE_LOCK_REASON = "Managed by Paseo; remove the workspace instead of pruning";
 
 export interface WorktreeConfig {
   branchName: string;
@@ -186,6 +188,7 @@ export type WorktreeSource =
   | { kind: "branch-off"; baseBranch: string; branchName: string }
   | { kind: "checkout-branch"; branchName: string }
   | { kind: "restore"; branchName: string; baseRef: string | null }
+  | { kind: "restore-from-base"; baseRef: string; branchName: string }
   | {
       kind: "checkout-change-request";
       forge: string;
@@ -218,6 +221,15 @@ export interface CreateWorktreeOptions {
   runSetup: boolean;
   paseoHome?: string;
   worktreesRoot?: string;
+  /**
+   * Link the worktree by relative path instead of absolute. Only a worktree
+   * linked this way can be used from inside a container, because the absolute
+   * form names host paths the container does not have. It writes
+   * `extensions.relativeWorktrees` on the repository, which git older than 2.48
+   * refuses to open — so the caller sets this only once it knows both the host
+   * and the image can read the result.
+   */
+  relativePaths?: boolean;
 }
 
 export class BranchAlreadyCheckedOutError extends Error {
@@ -610,6 +622,93 @@ async function assertPortAvailable(port: number): Promise<void> {
   });
 }
 
+/**
+ * Lock a worktree Paseo created, so nothing can prune it out from under us.
+ *
+ * `git worktree prune` deletes the admin directory — HEAD, index, reflog — of
+ * any worktree whose `gitdir` file names a path that does not exist, and
+ * `git gc` runs it on a three-month timer. A container is exactly that case:
+ * it mounts one worktree, so every *other* worktree of the repo reads as
+ * missing from inside it, and an agent running `git gc` there would delete a
+ * sibling workspace's state. Locking is git's own answer for a worktree whose
+ * files are not always reachable, and it survives both directions.
+ */
+async function lockPaseoWorktree(options: { cwd: string; worktreePath: string }): Promise<void> {
+  try {
+    await runGitCommand(
+      ["worktree", "lock", options.worktreePath, "--reason", PASEO_WORKTREE_LOCK_REASON],
+      { cwd: options.cwd, timeout: 30_000 },
+    );
+  } catch {
+    // Older git, or a worktree git no longer tracks. The worktree is still
+    // usable; it just keeps the prune exposure it had before.
+  }
+}
+
+/**
+ * Locked worktrees cannot be removed *or pruned*, so every path that heals a
+ * stale registration has to undo the lock first — removal here, and restore in
+ * workspace-recovery-service.
+ */
+export async function unlockPaseoWorktree(options: {
+  cwd: string;
+  worktreePath: string;
+}): Promise<void> {
+  try {
+    await runGitCommand(["worktree", "unlock", options.worktreePath], {
+      cwd: options.cwd,
+      timeout: 30_000,
+    });
+  } catch {
+    // Not locked, or already gone. Removal handles both.
+  }
+}
+
+/**
+ * Unlock every locked worktree whose directory is gone, so a following prune
+ * can clear the registration.
+ *
+ * Paseo locks its worktrees so nothing can prune a live one away, but the same
+ * lock stops prune from healing a *stale* entry — a worktree whose directory
+ * was removed without git being told. Restore depends on that healing: the
+ * stale entry keeps the branch pinned, and recreating it fails with "branch
+ * already checked out". Unlocking by path is not enough, because a record from
+ * an older version may not remember where its worktree was.
+ */
+export async function unlockStaleWorktrees(options: { cwd: string }): Promise<void> {
+  let listing: string;
+  try {
+    listing = (
+      await runGitCommand(["worktree", "list", "--porcelain"], {
+        cwd: options.cwd,
+        timeout: 30_000,
+      })
+    ).stdout;
+  } catch {
+    return;
+  }
+
+  let worktreePath: string | null = null;
+  let locked = false;
+  const flush = async (): Promise<void> => {
+    if (worktreePath && locked && !existsSync(worktreePath)) {
+      await unlockPaseoWorktree({ cwd: options.cwd, worktreePath });
+    }
+    worktreePath = null;
+    locked = false;
+  };
+  for (const line of listing.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("worktree ")) {
+      await flush();
+      worktreePath = trimmed.slice("worktree ".length);
+    } else if (trimmed === "locked" || trimmed.startsWith("locked ")) {
+      locked = true;
+    }
+  }
+  await flush();
+}
+
 async function inferRepoRootPathFromWorktreePath(worktreePath: string): Promise<string> {
   try {
     const commonDir = await getGitCommonDir(worktreePath);
@@ -683,6 +782,10 @@ export async function runWorktreeSetupCommands(options: {
     if (result.exitCode !== 0) {
       if (options.cleanupOnFailure) {
         try {
+          await unlockPaseoWorktree({
+            cwd: options.worktreePath,
+            worktreePath: options.worktreePath,
+          });
           await runGitCommand(["worktree", "remove", options.worktreePath, "--force"], {
             cwd: options.worktreePath,
             timeout: 120_000,
@@ -1127,6 +1230,8 @@ export async function deletePaseoWorktree({
 
   if (cwd) {
     try {
+      // Paseo locks the worktrees it creates; `remove` refuses a locked one.
+      await unlockPaseoWorktree({ cwd, worktreePath: resolvedWorktree });
       await runGitCommand(["worktree", "remove", resolvedWorktree, "--force"], {
         cwd,
         timeout: 120_000,
@@ -1143,6 +1248,9 @@ export async function deletePaseoWorktree({
 
   if (cwd) {
     try {
+      // Prune skips locked entries, so a lock that outlived a failed removal
+      // above would strand the admin directory permanently.
+      await unlockStaleWorktrees({ cwd });
       await runGitCommand(["worktree", "prune"], { cwd, timeout: 30_000 });
     } catch {
       // not critical; git will prune lazily
@@ -1222,6 +1330,7 @@ export const createWorktree = async ({
   runSetup,
   paseoHome,
   worktreesRoot,
+  relativePaths,
 }: CreateWorktreeOptions): Promise<CreatedWorktree> => {
   const sourcePlan = await resolveWorktreeSourcePlan({ cwd, source, desiredSlug: worktreeSlug });
   let worktreePath = join(await getPaseoWorktreesRoot(cwd, paseoHome, worktreesRoot), worktreeSlug);
@@ -1236,10 +1345,20 @@ export const createWorktree = async ({
   }
 
   // Primitive owner for `git worktree add`; callers route through createWorktreeCore.
-  await runGitCommand(["worktree", "add", finalWorktreePath, ...sourcePlan.addArguments], {
-    cwd,
-    timeout: 120_000,
-  });
+  await runGitCommand(
+    [
+      "worktree",
+      "add",
+      ...(relativePaths ? ["--relative-paths"] : []),
+      finalWorktreePath,
+      ...sourcePlan.addArguments,
+    ],
+    {
+      cwd,
+      timeout: 120_000,
+    },
+  );
+  await lockPaseoWorktree({ cwd, worktreePath: finalWorktreePath });
   worktreePath = normalizePathForOwnership(finalWorktreePath);
 
   if (sourcePlan.pushRemote) {
@@ -1341,6 +1460,21 @@ async function resolveRestoredWorktreeSourcePlan(
   };
 }
 
+async function resolveRestoredWorktreeFromBasePlan(
+  cwd: string,
+  source: Extract<WorktreeSource, { kind: "restore-from-base" }>,
+): Promise<WorktreeSourcePlan> {
+  await validateGitBranchName(cwd, source.branchName);
+  const baseRef = await resolveBaseBranchForWorktree(cwd, source.baseRef);
+  const branchName = await resolveUniqueLocalBranchName(cwd, source.branchName);
+  return {
+    branchName,
+    metadataBaseRefName: normalizeRequiredBaseBranch(source.baseRef),
+    metadataBaseRef: baseRef,
+    addArguments: ["-b", branchName, "--no-track", baseRef],
+  };
+}
+
 async function resolveBranchOffWorktreeSourcePlan(
   cwd: string,
   source: Extract<WorktreeSource, { kind: "branch-off" }>,
@@ -1352,6 +1486,7 @@ async function resolveBranchOffWorktreeSourcePlan(
   const resolvedBaseBranch = await resolveBaseBranchForWorktree(cwd, source.baseBranch);
   const branchExists = await localBranchExists(cwd, branchName);
   const base = branchExists ? branchName : resolvedBaseBranch;
+  await refreshRemoteTrackingBaseRef(cwd, base);
   const candidateBranch = branchExists ? desiredSlug : branchName;
   const newBranchName = await resolveUniqueLocalBranchName(cwd, candidateBranch);
 
@@ -1377,6 +1512,8 @@ async function resolveWorktreeSourcePlan({
       return resolveBranchOffWorktreeSourcePlan(cwd, source, desiredSlug);
     case "restore":
       return resolveRestoredWorktreeSourcePlan(cwd, source);
+    case "restore-from-base":
+      return resolveRestoredWorktreeFromBasePlan(cwd, source);
     case "checkout-branch": {
       await validateGitBranchName(cwd, source.branchName);
       await ensureLocalBranch(cwd, source.branchName);
@@ -1682,6 +1819,41 @@ async function resolveBaseBranchForWorktree(
     }
   }
   throw new Error(`Base branch not found: ${normalized}`);
+}
+
+// Clients give up on a create request after 60s. A remote that accepts the connection and never
+// answers (a VPN-only host while off the VPN) must fall back to the cached ref well before that.
+const REMOTE_BASE_REFRESH_TIMEOUT_MS = 15_000;
+
+// A remote-tracking base is only as fresh as the last fetch, and the background fetch only runs
+// while a workspace of the repository is observed. Refresh the one base branch so the new branch
+// starts at the remote tip; when the fetch fails (offline, auth) the cached ref is still usable.
+async function refreshRemoteTrackingBaseRef(cwd: string, baseRef: string): Promise<void> {
+  if (!baseRef.startsWith("refs/remotes/")) {
+    return;
+  }
+  try {
+    // Remote names may contain slashes, so the owning remote is looked up rather than parsed.
+    const { stdout } = await runGitCommand(["remote"], { cwd });
+    const remoteName = stdout
+      .split("\n")
+      .map((name) => name.trim())
+      .find((name) => name.length > 0 && baseRef.startsWith(`refs/remotes/${name}/`));
+    if (!remoteName) {
+      return;
+    }
+    const remoteBranch = baseRef.slice(`refs/remotes/${remoteName}/`.length);
+    // No refspec is added to remote.<name>.fetch: one left behind breaks later fetches once the
+    // branch is deleted on the remote.
+    await runGitCommand(["fetch", remoteName, `+refs/heads/${remoteBranch}:${baseRef}`], {
+      cwd,
+      envOverlay: { GIT_TERMINAL_PROMPT: "0" },
+      timeout: REMOTE_BASE_REFRESH_TIMEOUT_MS,
+      acceptExitCodes: [0, 1, 128],
+    });
+  } catch {
+    // The fetch timed out; branch from the cached ref.
+  }
 }
 
 async function ensureLocalBranch(cwd: string, branchName: string): Promise<void> {

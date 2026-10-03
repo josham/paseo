@@ -396,6 +396,8 @@ function executeGitCommand<Output>(
         // `core.quotepath=false` makes git emit raw UTF-8 paths instead of
         // octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
         // `core.fsmonitor=false` prevents repository config from launching a command.
+        // Git always runs on the host, including for container workspaces —
+        // see docs/devcontainers.md ("Git runs on the host").
         child = spawnProcess(
           "git",
           ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],

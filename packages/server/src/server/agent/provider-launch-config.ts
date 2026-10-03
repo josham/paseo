@@ -3,7 +3,13 @@ import {
   executableExists,
   findExecutable,
 } from "../../executable-resolution/executable-resolution.js";
-import { createExternalProcessEnv, type ProcessEnvRecord } from "../paseo-env.js";
+import {
+  createExternalProcessEnv,
+  type ProcessEnvRecord,
+  type ExternalProcessEnv,
+} from "../paseo-env.js";
+import type { Logger } from "pino";
+import type { ProcessLaunchStrategy } from "../devcontainer/launch-strategy.js";
 export {
   AgentProviderRuntimeSettingsMapSchema,
   ProviderCommandSchema,
@@ -39,6 +45,7 @@ export interface ResolvedProviderLaunch {
   command: string;
   args: string[];
   source: ProviderLaunchSource;
+  env?: ProcessEnvRecord;
 }
 
 export interface ProviderLaunchAvailability {
@@ -60,8 +67,8 @@ function normalizeLaunchDefault(
   return defaultBinary;
 }
 
-async function resolveLaunchPath(command: string): Promise<string | null> {
-  const found = await findExecutable(command);
+async function resolveLaunchPath(command: string, env?: ProcessEnvRecord): Promise<string | null> {
+  const found = await findExecutable(command, { env });
   if (found) {
     return found;
   }
@@ -116,11 +123,40 @@ export async function checkProviderLaunchAvailable(
   const resolvedPath =
     defaultBinary && launch.source !== "override"
       ? await resolveDefaultLaunchPath(defaultBinary)
-      : await resolveLaunchPath(launch.command);
+      : await resolveLaunchPath(launch.command, launch.env);
   return {
     available: resolvedPath !== null,
     resolvedPath,
   };
+}
+
+/**
+ * Whether a provider's command exists in the container a session would run in.
+ * The container equivalent of `checkProviderLaunchAvailable`, which answers for
+ * the host and says nothing about the image.
+ *
+ * It logs the reason it says no, and that is the point of it existing. Every
+ * way this can fail — the tool missing from the image, a workspace mounted at a
+ * path `docker exec -w` cannot enter, a container that never came up — arrives
+ * here as an exception and leaves as `false`, and one `false` is
+ * indistinguishable from another by the time the user is told the provider is
+ * not available.
+ */
+export async function isCommandAvailableInContainer(input: {
+  strategy: Pick<ProcessLaunchStrategy, "resolveExecutable">;
+  command: string;
+  logger: Logger;
+}): Promise<boolean> {
+  try {
+    await input.strategy.resolveExecutable(input.command);
+    return true;
+  } catch (error) {
+    input.logger.warn(
+      { err: error, command: input.command },
+      "Provider command did not resolve in the container",
+    );
+    return false;
+  }
 }
 
 export async function resolveProviderCommandPrefix(
@@ -242,7 +278,7 @@ export function createProviderEnvSpec(options: ProviderEnvOptions = {}): Provide
   };
 }
 
-export function createProviderEnv(options: ProviderEnvOptions = {}): NodeJS.ProcessEnv {
+export function createProviderEnv(options: ProviderEnvOptions = {}): ExternalProcessEnv {
   const spec = createProviderEnvSpec(options);
   return createExternalProcessEnv(spec.baseEnv ?? process.env, spec.envOverlay);
 }

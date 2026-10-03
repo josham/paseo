@@ -125,6 +125,10 @@ export interface WorkspaceDescriptor {
   gitRuntime?: WorkspaceDescriptorPayload["gitRuntime"];
   githubRuntime?: WorkspaceDescriptorPayload["githubRuntime"];
   forge?: WorkspaceDescriptorPayload["forge"];
+  containerBackend?: string | null;
+  containerStatus?: WorkspaceDescriptorPayload["containerStatus"];
+  hasDevContainerConfig?: WorkspaceDescriptorPayload["hasDevContainerConfig"];
+  containerInfo?: WorkspaceDescriptorPayload["containerInfo"];
   project?: ProjectPlacementPayload;
 }
 
@@ -161,8 +165,10 @@ export function normalizeWorkspaceDescriptor(
     diffStat: payload.diffStat ?? null,
     scripts: (payload.scripts ?? []).map((s) => Object.assign({}, s)),
     gitRuntime: payload.gitRuntime,
-    githubRuntime: payload.githubRuntime,
-    forge: payload.forge,
+    hasDevContainerConfig: payload.hasDevContainerConfig,
+    containerBackend: payload.containerBackend,
+    containerStatus: payload.containerStatus,
+    containerInfo: payload.containerInfo,
     project: payload.project,
   };
 }
@@ -283,6 +289,19 @@ export interface DaemonServerInfo {
   desktopManaged?: boolean;
   capabilities?: ServerCapabilities;
   features?: ServerInfoStatusPayload["features"];
+}
+
+export function toDaemonServerInfo(serverInfo: ServerInfoStatusPayload): DaemonServerInfo {
+  return {
+    serverId: serverInfo.serverId,
+    hostname: serverInfo.hostname ?? null,
+    version: serverInfo.version ?? null,
+    ...(serverInfo.desktopManaged !== undefined
+      ? { desktopManaged: serverInfo.desktopManaged }
+      : {}),
+    ...(serverInfo.capabilities ? { capabilities: serverInfo.capabilities } : {}),
+    ...(serverInfo.features ? { features: serverInfo.features } : {}),
+  };
 }
 
 export interface AgentTimelineCursorState {

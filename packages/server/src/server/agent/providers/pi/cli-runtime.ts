@@ -56,7 +56,13 @@ export class PiCliRuntime implements PiRuntime {
       runtimeSettings: this.options.runtimeSettings,
       session: input,
     });
-    const [command, ...args] = launch.argv;
+    const [argv0, ...args] = launch.argv;
+    // Whether the host has `pi` says nothing about the container. Resolving up
+    // front turns a missing binary into a legible error instead of exit 127
+    // from the container runtime; on the host this hands back argv0 unchanged.
+    const command = input.launchStrategy
+      ? await input.launchStrategy.resolveExecutable(argv0)
+      : argv0;
     const processLaunch: JsonlRpcLaunch = {
       command,
       args,
@@ -70,6 +76,7 @@ export class PiCliRuntime implements PiRuntime {
       diagnosticName: "Pi RPC",
       defaultRequestTimeoutMs: this.options.requestTimeoutMs,
       ...(spawn ? { spawn: () => spawn(launch) } : {}),
+      ...(input.launchStrategy ? { launchStrategy: input.launchStrategy } : {}),
     };
     const process = new JsonlRpcProcess(processOptions);
     if (input.signal?.aborted) {

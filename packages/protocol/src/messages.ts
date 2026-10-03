@@ -301,6 +301,7 @@ export const AgentFeatureSelectSchema = z.object({
   description: z.string().optional(),
   tooltip: z.string().optional(),
   icon: z.string().optional(),
+  desktopTrigger: z.enum(["icon", "label"]).optional(),
   value: z.string().nullable(),
   options: z.array(AgentSelectOptionSchema),
 });
@@ -417,7 +418,7 @@ const McpServerConfigSchema = z.discriminatedUnion("type", [
   McpSseServerConfigSchema,
 ]);
 
-const ProviderOptionsSchema = z.record(z.string(), z.json());
+const ProviderOptionsSchema = z.record(z.string(), z.unknown());
 
 const McpToolRefSchema = z
   .object({
@@ -1022,6 +1023,14 @@ export const WorkspaceLabelDeleteInspectRequestSchema = z.object({
   type: z.literal("workspace.label.delete.inspect.request"),
   requestId: z.string(),
   name: z.string(),
+});
+
+export const WorkspaceContainerBackendSetRequestSchema = z.object({
+  type: z.literal("workspace.container_backend.set.request"),
+  workspaceId: z.string(),
+  // null means "host" (no isolation). Any other string is a registered backend id.
+  containerBackend: z.string().nullable(),
+  requestId: z.string(),
 });
 
 export const WorkspaceRecoveryInspectRequestSchema = z.object({
@@ -1760,6 +1769,11 @@ export const RefreshProvidersSnapshotRequestMessageSchema = z.object({
   type: z.literal("refresh_providers_snapshot_request"),
   cwd: z.string().optional(),
   providers: z.array(AgentProviderSchema).optional(),
+  // COMPAT(devContainers): added in v0.2.0, unused since the probe carries its
+  // own results in container.probe.response. Still parsed so a client that
+  // sends it keeps working; the daemon refreshes with the workspace's own
+  // backend regardless.
+  containerBackend: z.string().nullable().optional(),
   requestId: z.string(),
 });
 
@@ -1772,6 +1786,13 @@ export const ProviderDiagnosticRequestMessageSchema = z.object({
 export const ProviderUsageListRequestMessageSchema = z.object({
   type: z.literal("provider.usage.list.request"),
   requestId: z.string(),
+});
+
+export const UsageListReportsRequestMessageSchema = z.object({
+  type: z.literal("usage.list_reports.request"),
+  requestId: z.string(),
+  reportIds: z.array(z.string()).optional(),
+  forceRefresh: z.boolean().optional(),
 });
 
 export const ResumeAgentRequestMessageSchema = z.object({
@@ -2069,6 +2090,20 @@ export const WorkspacePinSetResponsePayloadSchema = z.object({
 export const WorkspacePinSetResponseSchema = z.object({
   type: z.literal("workspace.pin.set.response"),
   payload: WorkspacePinSetResponsePayloadSchema,
+});
+
+export const WorkspaceContainerBackendSetResponsePayloadSchema = z.object({
+  requestId: z.string(),
+  workspaceId: z.string(),
+  accepted: z.boolean(),
+  // null means "host" (no isolation); otherwise a registered backend id.
+  containerBackend: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export const WorkspaceContainerBackendSetResponseSchema = z.object({
+  type: z.literal("workspace.container_backend.set.response"),
+  payload: WorkspaceContainerBackendSetResponsePayloadSchema,
 });
 
 export const WorkspaceRecoveryStateSchema = z.discriminatedUnion("kind", [
@@ -2635,6 +2670,9 @@ export const WorkspaceCreateRequestSchema = z.object({
       worktreeSlug: z.string().optional(),
     }),
   ]),
+  // COMPAT(devContainers): added in v0.2.0. The selected container backend for
+  // this workspace. Absent means "host" (old clients).
+  containerBackend: z.string().nullable().optional(),
 });
 
 export const WorkspaceClearAttentionRequestSchema = z.object({
@@ -3096,6 +3134,109 @@ export const HubExecutionControlRequestSchema = z.object({
 });
 
 export type HubExecutionControlRequest = z.infer<typeof HubExecutionControlRequestSchema>;
+// ============================================================================
+// Container management RPCs
+// ============================================================================
+
+export const ContainerRebuildRequestSchema = z.object({
+  type: z.literal("container.rebuild.request"),
+  workspaceId: z.string(),
+  requestId: z.string(),
+});
+
+export const ContainerRebuildResponseSchema = z.object({
+  type: z.literal("container.rebuild.response"),
+  payload: z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    containerStatus: z.enum(["running", "starting", "stopped", "none"]).nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const ContainerRestartRequestSchema = z.object({
+  type: z.literal("container.restart.request"),
+  workspaceId: z.string(),
+  requestId: z.string(),
+});
+
+export const ContainerRestartResponseSchema = z.object({
+  type: z.literal("container.restart.response"),
+  payload: z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    containerStatus: z.enum(["running", "starting", "stopped", "none"]).nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const ContainerAvailabilityRequestSchema = z.object({
+  type: z.literal("container.availability.request"),
+  cwd: z.string(),
+  requestId: z.string(),
+});
+
+export const ContainerAvailabilityResponseSchema = z.object({
+  type: z.literal("container.availability.response"),
+  payload: z.object({
+    requestId: z.string(),
+    // Registered container backends with their availability and per-cwd config
+    // state, so the client can render a dynamic backend selector.
+    backends: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        available: z.boolean(),
+        hasConfig: z.boolean(),
+      }),
+    ),
+  }),
+});
+
+export const ContainerProbeRequestSchema = z.object({
+  type: z.literal("container.probe.request"),
+  cwd: z.string(),
+  containerBackend: z.string(),
+  requestId: z.string(),
+});
+
+export const ContainerProbeCancelRequestSchema = z.object({
+  type: z.literal("container.probe.cancel.request"),
+  // The requestId of the probe to cancel.
+  requestId: z.string(),
+});
+
+export const ContainerProbeProgressNotificationSchema = z.object({
+  type: z.literal("container.probe.progress"),
+  payload: z.object({
+    requestId: z.string(),
+    // One line of build/start output, most recent last.
+    line: z.string(),
+  }),
+});
+
+export const ContainerProbeResponseSchema = z.object({
+  type: z.literal("container.probe.response"),
+  payload: z.object({
+    requestId: z.string(),
+    success: z.boolean(),
+    error: z.string().nullable(),
+    // Whether the probe was cancelled (superseded, dismissed, or disconnected)
+    // rather than failing. Absent on daemons that predate cancellation.
+    cancelled: z.boolean().optional().default(false),
+    // Provider entries as probed inside the container. The probe container is
+    // gone by the time this arrives, so these results are the only ones the
+    // client will get — it must not follow up with another refresh.
+    entries: z.array(ProviderSnapshotEntrySchema).optional(),
+  }),
+});
+
+export const ContainerConfigChangedNotificationSchema = z.object({
+  type: z.literal("container.config_changed"),
+  payload: z.object({
+    workspaceId: z.string(),
+  }),
+});
 
 // These connection event streams have no directory bootstrap or timeline membership.
 export const SessionEventSubscriptionSchema = z.enum([
@@ -3181,6 +3322,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceLabelUpdateRequestSchema,
   WorkspaceLabelDeleteRequestSchema,
   WorkspaceLabelDeleteInspectRequestSchema,
+  WorkspaceContainerBackendSetRequestSchema,
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
@@ -3232,6 +3374,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
+  UsageListReportsRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
   ImportAgentRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
@@ -3356,6 +3499,11 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   LoopInspectRequestSchema,
   LoopLogsRequestSchema,
   LoopStopRequestSchema,
+  ContainerRestartRequestSchema,
+  ContainerRebuildRequestSchema,
+  ContainerAvailabilityRequestSchema,
+  ContainerProbeRequestSchema,
+  ContainerProbeCancelRequestSchema,
 ]);
 
 export type SessionInboundMessage = z.infer<typeof SessionInboundMessageSchema>;
@@ -3514,6 +3662,7 @@ const ServerCapabilitiesFromUnknownSchema = z
 export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
+    protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),
     version: ServerInfoVersionSchema.optional(),
@@ -3533,6 +3682,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
+        usageSources: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -3693,6 +3843,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentProfiles: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
+        // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22 once daemon floor >= v0.2.0.
+        devContainers: z.boolean().optional(),
       })
       .optional(),
   })
@@ -4028,6 +4180,34 @@ export const WorkspaceDescriptorPayloadSchema = z
     project: ProjectPlacementPayloadSchema.optional(),
     // COMPAT(directorySync): sequence of this latest directory projection.
     syncSeq: z.number().int().positive().optional(),
+    // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
+    // The selected container backend for this workspace. Absent means "host".
+    containerBackend: z.string().nullable().optional(),
+    // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
+    // Whether this workspace is running inside an isolated execution environment
+    // (dev container, pod, VM, etc.). Absent means local execution (old daemons).
+    containerStatus: z.enum(["running", "starting", "stopped"]).nullish().optional(),
+    // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
+    // Whether a devcontainer.json exists for this workspace. The client uses this
+    // to decide whether to show the "Start/Rebuild container" menu item.
+    hasDevContainerConfig: z.boolean().nullish().optional(),
+    // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
+    // Metadata about the running container for tooltip display. Absent when
+    // no container is running or on old daemons.
+    containerInfo: z
+      .object({
+        backend: z.string(),
+        // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22.
+        // Absent on older daemons; clients fall back to the backend id.
+        backendLabel: z.string().optional(),
+        containerId: z.string(),
+        containerName: z.string(),
+        image: z.string(),
+        startedAt: z.string(),
+        remoteUser: z.string(),
+      })
+      .nullish()
+      .optional(),
   })
   .transform((workspace) => ({
     ...workspace,
@@ -6178,6 +6358,13 @@ export const ProviderUsageStatusSchema = z.enum(["available", "unavailable", "er
 export const ProviderUsageWindowSchema = z.object({
   id: z.string(),
   label: z.string(),
+  /**
+   * A few characters naming the window where space is tight, e.g. "5h" or "wk". An empty string
+   * shows the percent alone; leaving it out shows `label`.
+   */
+  shortLabel: z.string().optional(),
+  /** Shown in the usage summary until the user pins windows of their own. */
+  summary: z.boolean().optional(),
   usedPct: z.number().nullable().optional(),
   remainingPct: z.number().nullable().optional(),
   resetsAt: z.string().nullable().optional(),
@@ -6225,6 +6412,44 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
   }),
+});
+
+export const UsageProblemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("expired"),
+    expiresAt: z.iso.datetime(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("rejected"),
+    status: z.number().int(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("no_quota"), detail: z.string() }),
+]);
+export const UsageReportSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("available"),
+    planLabel: z.string().optional(),
+    windows: z.array(ProviderUsageWindowSchema),
+    balances: z.array(ProviderUsageBalanceSchema).optional(),
+    details: z.array(ProviderUsageDetailSchema).optional(),
+  }),
+  z.object({ status: z.literal("unavailable"), problem: UsageProblemSchema }),
+  z.object({ status: z.literal("error"), error: z.string() }),
+]);
+export const UsageReportEntrySchema = z.object({
+  id: z.string(),
+  account: z.object({ label: z.string().optional() }),
+  fetchedAt: z.string(),
+  sourceId: z.string(),
+  sourceLabel: z.string(),
+  icon: z.string().optional(),
+  report: UsageReportSchema,
+});
+export const UsageListReportsResponseMessageSchema = z.object({
+  type: z.literal("usage.list_reports.response"),
+  payload: z.object({ requestId: z.string(), reports: z.array(UsageReportEntrySchema) }),
 });
 
 const AgentSlashCommandSchema = z.object({
@@ -6847,6 +7072,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRemoveResponseSchema,
   WorkspaceTitleSetResponseSchema,
   WorkspacePinSetResponseSchema,
+  WorkspaceContainerBackendSetResponseSchema,
   WorkspaceRecoveryInspectResponseSchema,
   WorkspaceRecoveryRestoreResponseSchema,
   WaitForFinishResponseMessageSchema,
@@ -6912,6 +7138,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
   ProviderUsageListResponseMessageSchema,
+  UsageListReportsResponseMessageSchema,
   ListCommandsResponseSchema,
   ListTerminalsResponseSchema,
   TerminalsChangedSchema,
@@ -6945,6 +7172,12 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   LoopStopResponseSchema,
   DaemonUpdateProgressMessageSchema,
   DaemonUpdateResponseSchema,
+  ContainerRestartResponseSchema,
+  ContainerRebuildResponseSchema,
+  ContainerAvailabilityResponseSchema,
+  ContainerProbeResponseSchema,
+  ContainerProbeProgressNotificationSchema,
+  ContainerConfigChangedNotificationSchema,
 ]);
 
 export type SessionOutboundMessage = z.infer<typeof SessionOutboundMessageSchema>;
@@ -7050,6 +7283,12 @@ export type WorkspaceTitleSetResponsePayload = z.infer<
 >;
 export type WorkspacePinSetResponse = z.infer<typeof WorkspacePinSetResponseSchema>;
 export type WorkspacePinSetResponsePayload = z.infer<typeof WorkspacePinSetResponsePayloadSchema>;
+export type WorkspaceContainerBackendSetResponse = z.infer<
+  typeof WorkspaceContainerBackendSetResponseSchema
+>;
+export type WorkspaceContainerBackendSetResponsePayload = z.infer<
+  typeof WorkspaceContainerBackendSetResponsePayloadSchema
+>;
 export type WorkspaceRecoveryState = z.infer<typeof WorkspaceRecoveryStateSchema>;
 export type WorkspaceRecoveryInspectResponse = z.infer<
   typeof WorkspaceRecoveryInspectResponseSchema
@@ -7090,6 +7329,10 @@ export type ProviderDiagnosticResponseMessage = z.infer<
   typeof ProviderDiagnosticResponseMessageSchema
 >;
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
+export type UsageProblem = z.infer<typeof UsageProblemSchema>;
+export type UsageReport = z.infer<typeof UsageReportSchema>;
+export type UsageReportEntry = z.infer<typeof UsageReportEntrySchema>;
+export type UsageListReportsResponseMessage = z.infer<typeof UsageListReportsResponseMessageSchema>;
 export type ProviderUsageStatus = z.infer<typeof ProviderUsageStatusSchema>;
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 export type ProviderUsageWindow = z.infer<typeof ProviderUsageWindowSchema>;
@@ -7188,6 +7431,9 @@ export type LoopInspectRequest = z.infer<typeof LoopInspectRequestSchema>;
 export type LoopLogsRequest = z.infer<typeof LoopLogsRequestSchema>;
 export type LoopStopRequest = z.infer<typeof LoopStopRequestSchema>;
 export type ResumeAgentRequestMessage = z.infer<typeof ResumeAgentRequestMessageSchema>;
+export type WorkspaceContainerBackendSetRequest = z.infer<
+  typeof WorkspaceContainerBackendSetRequestSchema
+>;
 export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessageSchema>;
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;
 export type ProjectIconSource = z.infer<typeof ProjectIconSourceSchema>;
@@ -7392,6 +7638,21 @@ export type KillTerminalResponse = z.infer<typeof KillTerminalResponseSchema>;
 export type CaptureTerminalRequest = z.infer<typeof CaptureTerminalRequestSchema>;
 export type CaptureTerminalResponse = z.infer<typeof CaptureTerminalResponseSchema>;
 export type TerminalStreamExit = z.infer<typeof TerminalStreamExitSchema>;
+export type ContainerRestartRequest = z.infer<typeof ContainerRestartRequestSchema>;
+export type ContainerRestartResponse = z.infer<typeof ContainerRestartResponseSchema>;
+export type ContainerRebuildRequest = z.infer<typeof ContainerRebuildRequestSchema>;
+export type ContainerRebuildResponse = z.infer<typeof ContainerRebuildResponseSchema>;
+export type ContainerAvailabilityRequest = z.infer<typeof ContainerAvailabilityRequestSchema>;
+export type ContainerAvailabilityResponse = z.infer<typeof ContainerAvailabilityResponseSchema>;
+export type ContainerProbeRequest = z.infer<typeof ContainerProbeRequestSchema>;
+export type ContainerProbeCancelRequest = z.infer<typeof ContainerProbeCancelRequestSchema>;
+export type ContainerProbeResponse = z.infer<typeof ContainerProbeResponseSchema>;
+export type ContainerProbeProgressNotification = z.infer<
+  typeof ContainerProbeProgressNotificationSchema
+>;
+export type ContainerConfigChangedNotification = z.infer<
+  typeof ContainerConfigChangedNotificationSchema
+>;
 
 // ============================================================================
 // WebSocket Level Messages (wraps session messages)
@@ -7411,10 +7672,17 @@ export const WSHelloMessageSchema = z.object({
   clientId: z.string().min(1),
   clientType: z.enum(["mobile", "browser", "cli", "mcp", "hub"]),
   protocolVersion: z.number().int(),
+  auth: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("password"), password: z.string() }),
+      z.object({ kind: z.literal("localCredential"), token: z.string() }),
+    ])
+    .optional(),
   appVersion: z.string().optional(),
   capabilities: z
     .object({
       voice: z.boolean().optional(),
+      [CLIENT_CAPS.helloRejection]: z.boolean().optional(),
       pushNotifications: z.boolean().optional(),
       [CLIENT_CAPS.explicitEventSubscriptions]: z.boolean().optional(),
       [CLIENT_CAPS.allProviders]: z.boolean().optional(),
@@ -7450,6 +7718,12 @@ export const WSSessionOutboundSchema = z.object({
   message: SessionOutboundMessageSchema,
 });
 
+export const WSHelloRejectedMessageSchema = z.object({
+  type: z.literal("hello.rejected"),
+  reason: z.enum(["password_required", "incorrect_password", "incompatible_protocol"]),
+  accepts: z.array(z.literal("password")),
+});
+
 // Complete WebSocket message schemas
 export const WSInboundMessageSchema = z.discriminatedUnion("type", [
   WSPingMessageSchema,
@@ -7461,6 +7735,7 @@ export const WSInboundMessageSchema = z.discriminatedUnion("type", [
 export const WSOutboundMessageSchema = z.discriminatedUnion("type", [
   WSPongMessageSchema,
   WSSessionOutboundSchema,
+  WSHelloRejectedMessageSchema,
 ]);
 
 export type WSInboundMessage = z.infer<typeof WSInboundMessageSchema>;

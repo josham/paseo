@@ -14,7 +14,6 @@ import {
   type ProviderSnapshotTransition,
 } from "../../agent/provider-snapshot-manager.js";
 import type { ProviderSnapshotEntry } from "../../agent/agent-sdk-types.js";
-import { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import { expandProviderSnapshot } from "@getpaseo/protocol/provider-snapshot-codec";
 
 type SnapshotChangeHandler = (transition: ProviderSnapshotTransition) => void;
@@ -24,7 +23,6 @@ interface MakeOptions {
   supportsCustomModeIcons?: boolean;
   supportsCompactProviderSnapshots?: boolean;
   snapshot?: Partial<ProviderSnapshotManager>;
-  usage?: { [K in keyof ProviderUsageService]?: unknown };
   host?: Partial<ProviderCatalogSessionHost>;
 }
 
@@ -73,7 +71,6 @@ function makeSubsystem(options: MakeOptions = {}) {
   const subsystem = new ProviderCatalogSession({
     host,
     providerSnapshotManager,
-    providerUsageService: createStub<ProviderUsageService>(options.usage ?? {}),
     logger: pino({ level: "silent" }),
   });
   function pushSnapshotChange(
@@ -85,6 +82,52 @@ function makeSubsystem(options: MakeOptions = {}) {
   }
   return { subsystem, emitted, pushSnapshotChange };
 }
+
+describe("ProviderCatalogSession refresh scope", () => {
+  function makeRefreshSubsystem() {
+    const calls: Array<{ cwd?: string; launchStrategy?: unknown }> = [];
+    const { subsystem, emitted } = makeSubsystem({
+      snapshot: {
+        refreshSnapshotForCwd: async (options: { cwd?: string; launchStrategy?: unknown }) => {
+          calls.push(options);
+        },
+        refreshSettingsSnapshot: async () => {},
+      },
+    });
+    return { subsystem, emitted, calls };
+  }
+
+  it("asks for the host when the client says so", async () => {
+    // The new-workspace screen points at a directory that may already hold a
+    // container-backed workspace. Without an explicit host scope the daemon
+    // answers for that workspace's container instead.
+    const { subsystem, calls } = makeRefreshSubsystem();
+
+    await subsystem.handleRefreshProvidersSnapshotRequest({
+      type: "refresh_providers_snapshot_request",
+      cwd: "/repo/app",
+      containerBackend: null,
+      requestId: "req-1",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].launchStrategy).toBeDefined();
+    expect((calls[0].launchStrategy as { isIsolated: boolean }).isIsolated).toBe(false);
+  });
+
+  it("uses the workspace's own environment when no scope is given", async () => {
+    const { subsystem, calls } = makeRefreshSubsystem();
+
+    await subsystem.handleRefreshProvidersSnapshotRequest({
+      type: "refresh_providers_snapshot_request",
+      cwd: "/repo/app",
+      requestId: "req-1",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].launchStrategy).toBeUndefined();
+  });
+});
 
 describe("ProviderCatalogSession", () => {
   it("PUSH gates invisible providers and downgrades unknown mode icons for legacy clients", () => {
@@ -299,25 +342,6 @@ describe("ProviderCatalogSession", () => {
     });
   });
 
-  it("surfaces a usage-list failure as an rpc_error envelope", async () => {
-    const { subsystem, emitted } = makeSubsystem({
-      usage: {
-        listUsage: async () => {
-          throw new Error("quota service down");
-        },
-      },
-    });
-
-    await subsystem.handleProviderUsageListRequest({
-      type: "provider.usage.list.request",
-      requestId: "u1",
-    });
-
-    const err = findByType(emitted, "rpc_error");
-    expect(err?.payload.code).toBe("provider_usage_list_failed");
-    expect(err?.payload.requestId).toBe("u1");
-  });
-
   it("surfaces a feature-list failure inline, not as an rpc_error", async () => {
     const { subsystem, emitted } = makeSubsystem({
       host: {
@@ -388,10 +412,6 @@ it("announces shared content without retransmitting models or hashing discovery 
     new ProviderCatalogSession({
       providerSnapshotManager: manager,
       logger: pino({ level: "silent" }),
-      providerUsageService: new ProviderUsageService({
-        logger: pino({ level: "silent" }),
-        fetchers: [],
-      }),
       host: {
         emit(message) {
           emitted.push(message);

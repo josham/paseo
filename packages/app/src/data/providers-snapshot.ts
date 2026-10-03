@@ -7,7 +7,7 @@ import {
   type ProviderSnapshotCache,
 } from "./provider-snapshot-cache";
 import { queryClient as singletonQueryClient } from "./query-client";
-import { replaceProviderSnapshotIcons } from "@/components/provider-icon-name";
+import { replaceProviderSnapshotIcons } from "@/data/provider-icons";
 import { agentCommandsQueryRoot } from "@/hooks/agent-commands-query";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import { normalizeWorkspacePath } from "@/utils/workspace-identity";
@@ -33,12 +33,16 @@ export function providersSnapshotRequestOptions(input: {
   cwd?: string | null;
   providers?: AgentProvider[];
   ifNoneMatch?: string;
+  containerBackend?: string | null;
 }) {
   const normalizedCwd = normalizeProvidersSnapshotCwd(input.cwd);
   return {
     ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
     ...(input.providers ? { providers: input.providers } : {}),
     ...(input.ifNoneMatch ? { ifNoneMatch: input.ifNoneMatch } : {}),
+    // null is meaningful — "answer for the host" — so only an absent value is
+    // dropped.
+    ...(input.containerBackend === undefined ? {} : { containerBackend: input.containerBackend }),
   };
 }
 
@@ -126,6 +130,7 @@ export async function refreshAndApplyProvidersSnapshot(input: {
   cwd: string | null;
   providers?: AgentProvider[];
   cache?: ProviderSnapshotCache;
+  containerBackend?: string | null;
 }) {
   const result = await input.client.refreshProvidersSnapshot(
     providersSnapshotRequestOptions(input),
