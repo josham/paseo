@@ -21,6 +21,7 @@
 # edge/tooling is always merged first and does not belong in this list.
 
 fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (#3655, open)
+fix/content-width-boundary-key  # A content width change reaches a chat that is already open, without a reload (fork-only)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
 fix/navigator-polyfill-before-routes  # navigator polyfill runs before route modules, so Android release builds start (no upstream PR yet)
