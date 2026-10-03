@@ -2,6 +2,7 @@ import {
   waitForDaemonReady,
   resolvePaseoHome,
   type DaemonInstance,
+  readLocalCredentialForTarget,
 } from "@getpaseo/server/daemon-control";
 import { describeDaemonTarget, type DaemonTarget } from "./daemon-target.js";
 export type { DaemonTarget } from "./daemon-target.js";
@@ -16,17 +17,23 @@ import {
   parseConnectionOfferFromUrl,
   type ConnectionOffer,
 } from "@getpaseo/protocol/connection-offer";
-import { parseSshTransportUri } from "@getpaseo/protocol/ssh-transport";
+import { parseSshTransportUri, sshConnectTimeoutMs } from "@getpaseo/protocol/ssh-transport";
 import { DaemonClient, type WebSocketLike } from "@getpaseo/client/internal/daemon-client";
 import { WebSocket } from "ws";
 import { getOrCreateCliClientId } from "./client-id.js";
 import { resolveCliVersion } from "../version.js";
-import { createSshTunnel } from "../ssh/ssh-tunnel.js";
+import { openSshTunnel } from "../ssh/ssh-connect.js";
 
 export interface ConnectOptions {
   target: DaemonTarget;
   timeout?: number;
   instance?: DaemonInstance;
+}
+export function resolveClientPaseoHome(
+  target: DaemonTarget,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  return target.kind === "instance" ? target.home : resolvePaseoHome(env);
 }
 const DEFAULT_TIMEOUT = 15000;
 type TransportTarget =
@@ -172,6 +179,16 @@ export function resolveDaemonPassword(host: string): string | undefined {
   return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
 }
 
+export function resolveDaemonCredential(
+  host: string,
+  home: string,
+): { kind: "password"; password: string } | { kind: "localCredential"; token: string } | null {
+  const password = resolveDaemonPassword(host);
+  if (password) return { kind: "password", password };
+  const token = readLocalCredentialForTarget(home, host);
+  return token ? { kind: "localCredential", token } : null;
+}
+
 /**
  * Create a WebSocket factory that works in Node.js
  */
@@ -193,7 +210,8 @@ function createNodeWebSocketFactory() {
  */
 async function tryConnectHost(
   host: string,
-  password: string | undefined,
+  credential: ReturnType<typeof resolveDaemonCredential>,
+  home: string,
   clientId: string,
   timeout: number,
   nodeWebSocketFactory: ReturnType<typeof createNodeWebSocketFactory>,
@@ -204,7 +222,10 @@ async function tryConnectHost(
     clientId,
     clientType: "cli",
     appVersion: resolveCliVersion(),
-    password,
+    ...(credential?.kind === "password" ? { password: credential.password } : {}),
+    ...(credential?.kind === "localCredential"
+      ? { localCredential: () => readLocalCredentialForTarget(home, host) ?? undefined }
+      : {}),
     connectTimeoutMs: timeout,
     webSocketFactory: (
       url: string,
@@ -287,18 +308,28 @@ async function connectSelectedDaemon(options: ConnectOptions): Promise<DaemonCli
             instance: options.instance,
           })
         ).listen;
-  const clientId = await getOrCreateCliClientId(resolvePaseoHome({}));
+  const home = resolveClientPaseoHome(options.target);
+  const clientId = await getOrCreateCliClientId(home);
   const nodeWebSocketFactory = createNodeWebSocketFactory();
 
   if (explicitHost?.trim().startsWith("ssh://")) {
     const target = parseSshTransportUri(explicitHost.trim());
-    const tunnel = await createSshTunnel(target);
+    const tunnel = await openSshTunnel(target);
     const password = resolveDaemonPassword(explicitHost);
+    // `ssh` is not spawned until the first connection to the tunnel, so any
+    // password prompt happens inside this connect. The local default would
+    // expire while the prompt is still on screen.
     const result = await tryConnectHost(
       tunnel.endpoint,
-      password,
+      password ? { kind: "password", password } : null,
+      home,
       clientId,
-      Math.max(1, deadline - Date.now()),
+      // An explicit caller budget still shares the deadline with the steps above;
+      // without one the SSH default applies rather than the local one, which
+      // would expire while a password prompt is still on screen.
+      options.timeout === undefined
+        ? sshConnectTimeoutMs(target)
+        : Math.max(1, deadline - Date.now()),
       nodeWebSocketFactory,
     );
     if ("client" in result) {
@@ -330,7 +361,8 @@ async function connectSelectedDaemon(options: ConnectOptions): Promise<DaemonCli
 
   const result = await tryConnectHost(
     explicitHost,
-    resolveDaemonPassword(explicitHost),
+    resolveDaemonCredential(explicitHost, home),
+    home,
     clientId,
     Math.max(1, deadline - Date.now()),
     nodeWebSocketFactory,

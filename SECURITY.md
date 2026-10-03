@@ -42,11 +42,15 @@ The daemon requires a valid cryptographic handshake before processing any comman
 
 The QR code or pairing link is the trust anchor. It contains the daemon's public key, which is required to establish the encrypted connection. Treat it like a password — don't share it publicly.
 
+When a daemon password is configured, new relay clients send it in the encrypted `hello` message. This release still admits relay clients that send no credential so existing mobile builds continue to connect. A wrong password is rejected. The next release will require the password for relay connections after updated mobile builds are available.
+
 ## Local daemon trust boundary
 
-By default, the daemon binds to `127.0.0.1`. With no password configured, the local control plane is trusted by network reachability — anything that can reach the daemon socket can control the daemon. This is the same security model Docker documents for its daemon: the security boundary is access to the socket or listening address.
+By default, the daemon binds to `127.0.0.1`. With no password configured, anything that can reach the daemon socket can control the daemon. Loopback is reachable by other users on the machine and by some forwarding tools.
 
-The daemon also supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). When configured, every HTTP request must carry `Authorization: Bearer <password>` and every WebSocket upgrade must include a `Sec-WebSocket-Protocol: paseo.bearer.<password>` subprotocol. Browser WebSocket cannot set custom headers, which is why the token rides in the subprotocol. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt. The password is intended for direct-TCP exposure (e.g. `tcp://host:port?ssl=true&password=...`); it is **not** a substitute for the relay's E2E encryption when traversing untrusted networks.
+The daemon supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). WebSocket clients send the password in `hello`; the daemon sends no session data before admission. Direct connections still accept bearer headers and WebSocket bearer subprotocols for older clients. HTTP stays bearer-header based. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt; `/api/files/download` and `/mcp/agents` use their own capability tokens.
+
+The daemon writes a new `$PASEO_HOME/local-credential` on every run with mode `0600` and removes it on shutdown. The CLI and desktop main process read it only for the daemon whose PID lock `listen` matches their connection target. A same-user process can read this credential, so the password protects against network clients and other OS users, not processes running as the daemon user. Protect `$PASEO_HOME` accordingly. Relay traffic remains end-to-end encrypted independently of password admission.
 
 Connected clients are trusted operators of the daemon user. File previews follow that authority: a preview request may read any regular file the daemon process can read, while keeping path normalization and symlink checks in the daemon file service. Workspace-relative paths remain a UI convenience, not a security boundary.
 
@@ -79,6 +83,34 @@ One gap remains on web and desktop: a sandboxed document may navigate _itself_, 
 Native builds narrow this gap rather than closing it outright. The WebView refuses every navigation after the initial document, but that decision is made in the app's JavaScript, and on Android the WebView falls back to allowing a navigation when the decision doesn't come back in time. Treat it as a strong mitigation, not a guarantee: if the JS thread is stalled at the moment a page navigates, the same leak is possible there too.
 
 If you don't trust a page, read it in `Source`, which executes nothing. Source is available as an editable view on supported web hosts and a read-only view everywhere else.
+
+## SSH remote hosts
+
+The CLI and desktop app can reach a daemon on another machine over SSH (see
+[docs/ssh.md](docs/ssh.md)). SSH provides the authentication and transport
+encryption; Paseo adds nothing of its own to that connection. The remote daemon
+binds `127.0.0.1`, so the tunnel is the only way in.
+
+Three properties worth stating explicitly:
+
+**Connecting never installs anything.** Tunnelling to a host only forwards a
+port. Installing Paseo and launching a daemon there is a separate opt-in —
+`install=1` on the host URI, or the checkbox in Add host — recorded on the
+connection so it is never inferred. When it does run, Paseo installs only
+inside its own `installDir` and will use a `paseo` the host already provides in
+preference to installing a second one.
+
+**Host keys are confirmed, never auto-accepted.** Paseo does not set
+`StrictHostKeyChecking`, so OpenSSH's own policy applies. Without an askpass
+program an unknown host key fails the connection; with one, the fingerprint is
+shown in Paseo's UI for the user to confirm. Paseo never answers that question
+on the user's behalf.
+
+**Secrets are relayed, not stored.** The askpass channel lives in a private
+`mkdtemp` directory (mode 0700) for the life of one connection attempt and is
+removed afterwards. An answer is held in memory only long enough to be replayed
+to the second `ssh` process of the same attempt, so the user is asked once
+rather than twice; nothing is written to disk and nothing survives the attempt.
 
 ## Agent authentication
 

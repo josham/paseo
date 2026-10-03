@@ -76,6 +76,15 @@ describe("normalizeStoredHostProfile", () => {
     expect(profile?.connections[0]).not.toHaveProperty("password");
   });
 
+  it("moves a stored direct TCP password to the host profile", () => {
+    const profile = normalizeStoredHostProfile({
+      serverId: "srv_legacy",
+      connections: [{ type: "directTcp", endpoint: "localhost:6767", password: "old-secret" }],
+    });
+    expect(profile?.password).toBe("old-secret");
+    expect(profile?.connections[0]).not.toHaveProperty("password");
+  });
+
   it("preserves legacy relay ids when TLS is absent", () => {
     const profile = normalizeStoredHostProfile({
       serverId: "srv_relay",
@@ -164,9 +173,52 @@ describe("normalizeStoredHostProfile", () => {
       daemonPort: 7777,
     });
   });
+
+  it("keeps a stored remote setup opt-in across restarts", () => {
+    const profile = normalizeStoredHostProfile({
+      serverId: "srv_ssh",
+      connections: [
+        {
+          type: "remoteSsh",
+          host: "build-box",
+          remoteDaemon: { installDir: "/opt/paseo" },
+        },
+      ],
+    });
+
+    expect(profile?.connections[0]).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: { installDir: "/opt/paseo" },
+    });
+  });
 });
 
 describe("createRemoteSshHostConnection", () => {
+  it("remembers that the user asked Paseo to set the host up", () => {
+    expect(
+      createRemoteSshHostConnection({
+        host: "build-box",
+        remoteDaemon: { remoteHome: " /srv/paseo ", installDir: "", version: "0.7.2" },
+      }),
+    ).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: { remoteHome: "/srv/paseo", version: "0.7.2" },
+    });
+  });
+
+  it("keeps a bare opt-in, which is what the Add-host checkbox produces", () => {
+    expect(createRemoteSshHostConnection({ host: "build-box", remoteDaemon: {} })).toEqual({
+      id: "ssh:build-box::",
+      type: "remoteSsh",
+      host: "build-box",
+      remoteDaemon: {},
+    });
+  });
+
   it("keeps optional SSH settings absent", () => {
     expect(createRemoteSshHostConnection({ host: "build-box" })).toEqual({
       id: "ssh:build-box::",
@@ -228,26 +280,28 @@ describe("upsertHostConnectionInProfiles", () => {
       type: "directTcp",
       endpoint: "example.test:6767",
       useTls: false,
-      password: "old-secret",
     };
     const existing: HostProfile = {
       ...makeHost("srv_known"),
+      password: "old-secret",
       connections: [existingConnection],
       preferredConnectionId: existingConnection.id,
     };
     const replacement: HostConnection = {
       ...existingConnection,
       useTls: true,
-      password: "new-secret",
     };
 
     const [profile] = upsertHostConnectionInProfiles({
       profiles: [existing],
       serverId: "srv_known",
       connection: replacement,
+      password: "new-secret",
     });
 
     expect(profile.connections).toEqual([replacement]);
+    expect("password" in profile.connections[0]!).toBe(false);
+    expect(profile.password).toBe("new-secret");
     expect(profile.preferredConnectionId).toBe(replacement.id);
   });
 });

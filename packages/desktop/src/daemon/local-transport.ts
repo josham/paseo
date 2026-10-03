@@ -3,9 +3,15 @@ import { createServer, type Server, type Socket } from "node:net";
 import {
   buildSshTunnelArgs,
   DEFAULT_SSH_DAEMON_PORT,
+  isSshAuthFailureStderr,
+  markSshAuthRequired,
   validatePort,
   validateSshHost,
+  sshConnectTimeoutMs,
+  type SshRemoteDaemonOptions,
 } from "@getpaseo/protocol/ssh-transport";
+import { ensureRemoteDaemon, type AskpassChannel } from "@getpaseo/server/ssh";
+import { createDesktopAskpassChannel } from "./ssh-askpass.js";
 import { BrowserWindow } from "electron";
 import { WebSocket, type RawData } from "ws";
 
@@ -19,6 +25,12 @@ export interface SshTransportTarget {
   host: string;
   sshPort?: number;
   daemonPort?: number;
+  /**
+   * Present only for a host the user asked Paseo to set up. Absent — the
+   * default — means the connection tunnels to a daemon that is already
+   * running and touches nothing on the remote host.
+   */
+  remoteDaemon?: SshRemoteDaemonOptions;
 }
 
 export type TransportTarget = LocalTransportTarget | SshTransportTarget;
@@ -82,6 +94,18 @@ const WS_ENDPOINT_PATH = "/ws";
 const SSH_STDERR_LIMIT = 8192;
 export const LOCAL_TRANSPORT_SETUP_TIMEOUT_MS = 30_000;
 
+/**
+ * A socket or pipe is either there or not, so 30s is generous. An SSH session
+ * may be waiting on a password dialog, or on Paseo being installed on the
+ * remote host, and cutting it short would cancel the connection under the
+ * user's own prompt.
+ */
+export function resolveTransportSetupTimeoutMs(target: TransportTarget): number {
+  return target.transportType === "ssh"
+    ? sshConnectTimeoutMs(target)
+    : LOCAL_TRANSPORT_SETUP_TIMEOUT_MS;
+}
+
 function emitTransportEvent(payload: TransportEventPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send("paseo:event:local-daemon-transport-event", payload);
@@ -142,6 +166,30 @@ function parseSshTransportTarget(value: Record<string, unknown>): SshTransportTa
     host,
     ...(sshPort !== undefined ? { sshPort } : {}),
     ...(daemonPort !== undefined ? { daemonPort } : {}),
+    ...parseRemoteDaemonOptions(value.remoteDaemon),
+  };
+}
+
+function optionalTrimmed(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`${label} must be a string.`);
+  return value.trim() || undefined;
+}
+
+function parseRemoteDaemonOptions(
+  value: unknown,
+): { remoteDaemon: SshRemoteDaemonOptions } | Record<string, never> {
+  if (value === undefined || value === null) return {};
+  if (!isRecord(value)) throw new Error("Remote daemon options must be an object.");
+  const remoteHome = optionalTrimmed(value.remoteHome, "Remote home");
+  const installDir = optionalTrimmed(value.installDir, "Install directory");
+  const version = optionalTrimmed(value.version, "Paseo version");
+  return {
+    remoteDaemon: {
+      ...(remoteHome !== undefined ? { remoteHome } : {}),
+      ...(installDir !== undefined ? { installDir } : {}),
+      ...(version !== undefined ? { version } : {}),
+    },
   };
 }
 
@@ -170,12 +218,27 @@ function parseOpenTransportSessionInput(value: unknown): OpenTransportSessionInp
   };
 }
 
-export function buildSshArgs(target: SshTransportTarget): string[] {
-  return buildSshTunnelArgs({
+function toProtocolTarget(target: SshTransportTarget) {
+  return {
     host: target.host,
     ...(target.sshPort !== undefined ? { sshPort: target.sshPort } : {}),
     daemonPort: target.daemonPort ?? DEFAULT_SSH_DAEMON_PORT,
-  });
+    ...(target.remoteDaemon ? { remoteDaemon: target.remoteDaemon } : {}),
+  };
+}
+
+export function buildSshArgs(target: SshTransportTarget, askpassPath?: string): string[] {
+  return buildSshTunnelArgs(toProtocolTarget(target), askpassPath ? { askpassPath } : undefined);
+}
+
+/**
+ * Tag a failure that only means "no usable credential", so the app can offer to
+ * connect instead of showing the user a line of `ssh` stderr they cannot act
+ * on. This is the ordinary outcome of a reconnect Paseo was not allowed to
+ * prompt for — see the grants in `./ssh-askpass.ts`.
+ */
+function classifySshFailure(detail: string): string {
+  return isSshAuthFailureStderr(detail) ? markSshAuthRequired(detail) : detail;
 }
 
 function formatSshFailure(
@@ -184,16 +247,21 @@ function formatSshFailure(
   signal: NodeJS.Signals | null,
 ): string {
   const detail = stderr.trim();
-  if (detail) return detail;
+  if (detail) return classifySshFailure(detail);
   if (signal) return `ssh exited with signal ${signal}`;
   return `ssh exited with code ${code ?? "unknown"}`;
 }
 
 export function resolveSshFailureDetail(failure: string | null, stderr: string): string | null {
-  return failure ?? (stderr.trim() || null);
+  if (failure) return failure;
+  const detail = stderr.trim();
+  return detail ? classifySshFailure(detail) : null;
 }
 
-function createSshProxy(target: SshTransportTarget): Promise<TransportEndpoint> {
+function createSshProxy(
+  target: SshTransportTarget,
+  askpass: AskpassChannel | null,
+): Promise<TransportEndpoint> {
   let server: Server | null = null;
   let socket: Socket | null = null;
   let child: ChildProcessWithoutNullStreams | null = null;
@@ -217,9 +285,10 @@ function createSshProxy(target: SshTransportTarget): Promise<TransportEndpoint> 
       server?.close();
       server = null;
 
-      child = spawn("ssh", buildSshArgs(target), {
+      child = spawn("ssh", buildSshArgs(target, askpass?.askpassPath), {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        ...(askpass ? { env: askpass.askpassEnv(process.env) } : {}),
       });
       child.stderr.on("data", (chunk: Buffer | string) => {
         stderr = `${stderr}${chunk.toString()}`.slice(-SSH_STDERR_LIMIT);
@@ -264,9 +333,47 @@ function createSshProxy(target: SshTransportTarget): Promise<TransportEndpoint> 
   });
 }
 
+async function resolveSshEndpoint(target: SshTransportTarget): Promise<TransportEndpoint> {
+  // The channel has to outlive this call: `ssh` is not spawned until something
+  // connects to the proxy port, so the prompt comes later. Closing the
+  // endpoint closes it.
+  const askpass = await createDesktopAskpassChannel(target.host);
+  try {
+    if (target.remoteDaemon) {
+      // The setup connection fails on credentials the same way the tunnel does,
+      // and its error reaches the user by the same route, so it carries the
+      // same marker.
+      await ensureRemoteDaemon({
+        target: toProtocolTarget(target),
+        ...(askpass
+          ? {
+              askpassPath: askpass.askpassPath,
+              env: askpass.askpassEnv(process.env),
+              cancelSignal: askpass.signal,
+            }
+          : {}),
+      }).catch((error: unknown) => {
+        const message = getErrorMessage(error);
+        throw isSshAuthFailureStderr(message) ? new Error(markSshAuthRequired(message)) : error;
+      });
+    }
+    const endpoint = await createSshProxy(target, askpass);
+    return {
+      ...endpoint,
+      close: () => {
+        endpoint.close();
+        askpass?.close();
+      },
+    };
+  } catch (error) {
+    askpass?.close();
+    throw error;
+  }
+}
+
 async function resolveTransportEndpoint(target: TransportTarget): Promise<TransportEndpoint> {
   if (target.transportType === "ssh") {
-    return createSshProxy(target);
+    return resolveSshEndpoint(target);
   }
   return {
     url: buildLocalWebSocketUrl(target),
@@ -489,7 +596,7 @@ export function createLocalTransportManager(
         session,
         `Connection to ${describeTransportTarget(target)} timed out during setup.`,
       );
-    }, LOCAL_TRANSPORT_SETUP_TIMEOUT_MS);
+    }, resolveTransportSetupTimeoutMs(target));
     void connectSession(session);
   }
 
