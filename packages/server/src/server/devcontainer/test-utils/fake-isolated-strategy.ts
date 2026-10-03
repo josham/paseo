@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 
-import type {
-  LaunchSpawnOptions,
-  ContainerExecSpec,
-  ProcessLaunchStrategy,
-  ResolvedCommand,
+import {
+  ExecutableNotFoundError,
+  type LaunchSpawnOptions,
+  type ContainerExecSpec,
+  type ProcessLaunchStrategy,
+  type ResolvedCommand,
 } from "../launch-strategy.js";
 
 /**
@@ -87,7 +88,7 @@ export class FakeIsolatedLaunchStrategy implements ProcessLaunchStrategy {
   async resolveExecutable(command: string): Promise<string> {
     this.resolvedExecutables.push(command);
     if (this.missingExecutables.has(command)) {
-      throw new Error(`'${command}' is not installed in this environment`);
+      throw new ExecutableNotFoundError(command);
     }
     return command;
   }

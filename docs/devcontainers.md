@@ -43,6 +43,7 @@ The cost: these labels are a CLI convention we reproduce rather than a documente
 | Terminals                                | Container     | Same shell the agent sees                                                                      |
 | Agent-requested commands (ACP terminals) | Container     | The agent asks for them in its own workspace                                                   |
 | Provider catalog / model probes          | Container     | The container's tool version is the one that will run, so the host's model list would be wrong |
+| Language servers (code navigation)       | Container     | The toolchain is there, and a server runs project code (`build.rs`, `go list`)                 |
 | Git                                      | **Host**      | See below                                                                                      |
 | Container lifecycle itself               | Host          | `devcontainer up`, `docker stop`, `docker inspect`                                             |
 

@@ -119,6 +119,11 @@ export async function fanOutReconciledWorkspaceUpdates(input: {
 
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
+import { createWorkspaceLauncherResolver } from "./code-navigation/container-launcher.js";
+import {
+  createCodeNavigationService,
+  createConfigSettingsReader,
+} from "./code-navigation/service.js";
 import { createWorkspaceLabelService } from "./workspace-labels/index.js";
 import { createGitHubService } from "../services/github-service.js";
 import { createPaseoWorktree as createRegisteredPaseoWorktree } from "./paseo-worktree-service.js";
@@ -1010,6 +1015,13 @@ export async function createPaseoDaemon(
     }
     return strategy;
   };
+  const codeNavigation = createCodeNavigationService({
+    logger,
+    workspaceRegistry,
+    readSettings: createConfigSettingsReader({ paseoHome: config.paseoHome, logger }),
+    resolveLauncher: createWorkspaceLauncherResolver(resolveWorkspaceLaunchStrategy),
+    managedProcesses,
+  });
 
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const agentManager = new AgentManager({
@@ -1818,6 +1830,7 @@ export async function createPaseoDaemon(
               devContainerAvailable,
               launchStrategyRegistry,
               containerBackends,
+              codeNavigation,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
@@ -1871,6 +1884,7 @@ export async function createPaseoDaemon(
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
       await agentProviderRuntime.shutdown().catch(() => undefined);
+      await codeNavigation.dispose().catch(() => undefined);
       if (mainStarted) {
         httpServer.closeAllConnections();
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
@@ -1905,6 +1919,7 @@ export async function createPaseoDaemon(
     await agentProviderRuntime.shutdown();
     await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
+    await codeNavigation.dispose();
     await speechService.stop();
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);
