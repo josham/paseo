@@ -67,6 +67,8 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
       const sha = trimNonEmpty(value.sha);
       return sha ? { kind: "commit_diff", sha } : null;
     }
+    case "code_locations":
+      return normalizeCodeLocationsTabTarget(value);
     default:
       return null;
   }
@@ -155,7 +157,23 @@ function secondaryWorkspaceTabTargetsEqual(
   if (left.kind === "commit_diff" && right.kind === "commit_diff") {
     return left.sha === right.sha;
   }
+  if (left.kind === "code_locations" && right.kind === "code_locations") {
+    return codeLocationsTargetsEqual(left, right);
+  }
   return false;
+}
+
+function codeLocationsTargetsEqual(
+  left: Extract<WorkspaceTabTarget, { kind: "code_locations" }>,
+  right: Extract<WorkspaceTabTarget, { kind: "code_locations" }>,
+): boolean {
+  return (
+    left.locationKind === right.locationKind &&
+    left.path === right.path &&
+    left.line === right.line &&
+    left.character === right.character &&
+    left.symbol === right.symbol
+  );
 }
 
 function workspaceDraftTabSetupsEqual(
@@ -216,6 +234,9 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   if (target.kind === "commit_diff") {
     return `commit_diff_${target.sha}`;
   }
+  if (target.kind === "code_locations") {
+    return "code_locations";
+  }
   if (target.kind === "working_diff") {
     return "working_diff";
   }
@@ -229,6 +250,23 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
       : `plugin_agent_${identity}_${target.agentId.length}_${target.agentId}`;
   }
   return `file_${target.path}`;
+}
+
+function normalizeCodeLocationsTabTarget(
+  value: Extract<WorkspaceTabTarget, { kind: "code_locations" }>,
+): WorkspaceTabTarget | null {
+  const path = trimNonEmpty(value.path);
+  const symbol = trimNonEmpty(value.symbol);
+  const isPosition = Number.isInteger(value.line) && Number.isInteger(value.character);
+  if (!path || !symbol || !isPosition || value.line < 0 || value.character < 0) return null;
+  return {
+    kind: "code_locations",
+    locationKind: value.locationKind === "definition" ? "definition" : "references",
+    path,
+    line: value.line,
+    character: value.character,
+    symbol,
+  };
 }
 
 function normalizePluginTabTarget(

@@ -1,5 +1,6 @@
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import type { CodeSymbolLocationKind } from "@getpaseo/protocol/messages";
 import type { WorkspaceFileTabTarget } from "@/workspace/file-open";
 
 export interface WorkspaceDraftTabSetup {
@@ -15,6 +16,22 @@ export interface WorkspaceWorkingDiffTabTarget {
   kind: "working_diff";
   focusPath?: string;
   focusRequestId?: number;
+}
+
+/**
+ * Results of a code navigation query. One tab serves every query: a new one retargets it, the
+ * way an editor's references panel is reused rather than stacked.
+ */
+export interface WorkspaceCodeLocationsTabTarget {
+  kind: "code_locations";
+  locationKind: CodeSymbolLocationKind;
+  /** Workspace-relative path of the document the query was made in. */
+  path: string;
+  /** Zero-based. */
+  line: number;
+  /** Zero-based UTF-16 offset. */
+  character: number;
+  symbol: string;
 }
 
 export type PluginWorkspaceTabTarget =
@@ -46,7 +63,8 @@ export type WorkspaceTabTarget =
   | WorkspaceWorkingDiffTabTarget
   | PluginWorkspaceTabTarget
   | { kind: "setup"; workspaceId: string }
-  | { kind: "commit_diff"; sha: string };
+  | { kind: "commit_diff"; sha: string }
+  | WorkspaceCodeLocationsTabTarget;
 
 export interface WorkspaceTab {
   tabId: string;

@@ -87,6 +87,9 @@ const INBOUND_PERMISSION = {
   "file.upload.request": "workspace.write",
   file_download_token_request: "workspace.read",
   file_explorer_request: "workspace.read",
+  // Starting a language server runs project code (build scripts, `go list`), which is write
+  // authority for the same reason terminals are.
+  "code.symbol.get_locations.request": "workspace.write",
   "forge.search.request": "workspace.read",
   "fs.entry.create.request": "workspace.write",
   "fs.entry.delete.request": "workspace.write",
@@ -149,6 +152,7 @@ const INBOUND_PERMISSION = {
   "project.rename.request": "workspace.manage",
   project_icon_request: "workspace.read",
   "provider.usage.list.request": "daemon.read",
+  "usage.list_reports.request": "daemon.read",
   provider_diagnostic_request: "daemon.read",
   pull_request_timeline_request: "workspace.read",
   "push.unregister.request": "workspace.read",
@@ -308,6 +312,7 @@ const OUTBOUND_PERMISSION = {
   "file.upload.response": "workspace.write",
   file_download_token_response: "workspace.read",
   file_explorer_response: "workspace.read",
+  "code.symbol.get_locations.response": "workspace.write",
   "forge.search.response": "workspace.read",
   "fs.entry.create.response": "workspace.write",
   "fs.entry.delete.response": "workspace.write",
@@ -373,6 +378,7 @@ const OUTBOUND_PERMISSION = {
   "project.update": "workspace.read",
   project_icon_response: "workspace.read",
   "provider.usage.list.response": "daemon.read",
+  "usage.list_reports.response": "daemon.read",
   provider_diagnostic_response: "daemon.read",
   providers_snapshot_update: ["daemon.read", "hub.execute"],
   pull_request_timeline_response: "workspace.read",

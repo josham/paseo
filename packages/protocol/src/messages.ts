@@ -301,6 +301,7 @@ export const AgentFeatureSelectSchema = z.object({
   description: z.string().optional(),
   tooltip: z.string().optional(),
   icon: z.string().optional(),
+  desktopTrigger: z.enum(["icon", "label"]).optional(),
   value: z.string().nullable(),
   options: z.array(AgentSelectOptionSchema),
 });
@@ -417,7 +418,7 @@ const McpServerConfigSchema = z.discriminatedUnion("type", [
   McpSseServerConfigSchema,
 ]);
 
-const ProviderOptionsSchema = z.record(z.string(), z.json());
+const ProviderOptionsSchema = z.record(z.string(), z.unknown());
 
 const McpToolRefSchema = z
   .object({
@@ -1774,6 +1775,13 @@ export const ProviderUsageListRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const UsageListReportsRequestMessageSchema = z.object({
+  type: z.literal("usage.list_reports.request"),
+  requestId: z.string(),
+  reportIds: z.array(z.string()).optional(),
+  forceRefresh: z.boolean().optional(),
+});
+
 export const ResumeAgentRequestMessageSchema = z.object({
   type: z.literal("resume_agent_request"),
   handle: AgentPersistenceHandleSchema,
@@ -2762,6 +2770,37 @@ export const FileWriteRequestSchema = z.object({
   requestId: z.string(),
 });
 
+/**
+ * A position in a text document: zero-based line, and a zero-based character offset in UTF-16
+ * code units, which is both LSP's default encoding and JavaScript string indexing.
+ */
+export const CodePositionSchema = z.object({
+  line: z.number().int().nonnegative(),
+  character: z.number().int().nonnegative(),
+});
+
+export const CodeRangeSchema = z.object({
+  start: CodePositionSchema,
+  end: CodePositionSchema,
+});
+
+export const CodeSymbolLocationKindSchema = z.enum(["definition", "references"]);
+
+export const CodeSymbolGetLocationsRequestSchema = z.object({
+  type: z.literal("code.symbol.get_locations.request"),
+  cwd: z.string(),
+  /** Workspace-relative path of the document the position refers to. */
+  path: z.string(),
+  kind: CodeSymbolLocationKindSchema,
+  position: CodePositionSchema,
+  /**
+   * Unsaved editor text for `path`. Without it the language server reads the file on disk, and
+   * positions taken from a dirty buffer would point at the wrong symbol.
+   */
+  content: z.string().optional(),
+  requestId: z.string(),
+});
+
 export const FileEntryCreateRequestSchema = z.object({
   type: z.literal("fs.entry.create.request"),
   cwd: z.string(),
@@ -3232,6 +3271,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
+  UsageListReportsRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
   ImportAgentRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
@@ -3307,6 +3347,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeRequestSchema,
   FileUnsubscribeRequestSchema,
   FileWriteRequestSchema,
+  CodeSymbolGetLocationsRequestSchema,
   FileEntryCreateRequestSchema,
   FileEntryRenameRequestSchema,
   FileEntryDuplicateRequestSchema,
@@ -3514,6 +3555,7 @@ const ServerCapabilitiesFromUnknownSchema = z
 export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
+    protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),
     version: ServerInfoVersionSchema.optional(),
@@ -3533,6 +3575,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
+        usageSources: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -3615,6 +3658,8 @@ export const ServerInfoStatusPayloadSchema = z
         worktreeRestore: z.boolean().optional(),
         // COMPAT(workspaceRecovery): added in v0.1.105, remove after 2027-01-11 once daemon floor >= v0.1.105.
         workspaceRecovery: z.boolean().optional(),
+        // COMPAT(codeNavigation): added in v0.9.3, remove gate after 2027-09-24.
+        codeNavigation: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
@@ -5972,6 +6017,51 @@ export const FileWriteResponseSchema = z.object({
   }),
 });
 
+export const CodeLocationSchema = z.object({
+  /** Workspace-relative when the target is inside the workspace, absolute otherwise. */
+  path: z.string(),
+  range: CodeRangeSchema,
+  /** The target's first line, trimmed; null when the file could not be read. */
+  preview: z.string().nullable(),
+  /**
+   * False when the target exists only where the language server runs, such as a library inside
+   * a dev container image, so the file viewer has no way to read it.
+   */
+  openable: z.boolean(),
+});
+
+export const CodeSymbolLocationsResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    locations: z.array(CodeLocationSchema),
+    /** The symbol the position resolved to, as the language server delimits it. */
+    originRange: CodeRangeSchema.nullable(),
+    /** The server was still indexing when it answered, so references may be missing. */
+    partial: z.boolean(),
+    truncated: z.boolean(),
+  }),
+  z.object({ status: z.literal("unsupported_language") }),
+  z.object({
+    status: z.literal("server_not_installed"),
+    serverId: z.string(),
+    /** Commands probed, in preference order; installing any one of them enables the language. */
+    commands: z.array(z.string()),
+  }),
+  z.object({
+    status: z.literal("unavailable"),
+    reason: z.enum(["disabled", "not_a_workspace", "container_not_running"]),
+  }),
+  z.object({ status: z.literal("failed"), message: z.string() }),
+]);
+
+export const CodeSymbolGetLocationsResponseSchema = z.object({
+  type: z.literal("code.symbol.get_locations.response"),
+  payload: z.object({
+    result: CodeSymbolLocationsResultSchema,
+    requestId: z.string(),
+  }),
+});
+
 export const FileEntryCreateResponseSchema = z.object({
   type: z.literal("fs.entry.create.response"),
   payload: z.object({
@@ -6178,6 +6268,13 @@ export const ProviderUsageStatusSchema = z.enum(["available", "unavailable", "er
 export const ProviderUsageWindowSchema = z.object({
   id: z.string(),
   label: z.string(),
+  /**
+   * A few characters naming the window where space is tight, e.g. "5h" or "wk". An empty string
+   * shows the percent alone; leaving it out shows `label`.
+   */
+  shortLabel: z.string().optional(),
+  /** Shown in the usage summary until the user pins windows of their own. */
+  summary: z.boolean().optional(),
   usedPct: z.number().nullable().optional(),
   remainingPct: z.number().nullable().optional(),
   resetsAt: z.string().nullable().optional(),
@@ -6225,6 +6322,44 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
   }),
+});
+
+export const UsageProblemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("expired"),
+    expiresAt: z.iso.datetime(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("rejected"),
+    status: z.number().int(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("no_quota"), detail: z.string() }),
+]);
+export const UsageReportSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("available"),
+    planLabel: z.string().optional(),
+    windows: z.array(ProviderUsageWindowSchema),
+    balances: z.array(ProviderUsageBalanceSchema).optional(),
+    details: z.array(ProviderUsageDetailSchema).optional(),
+  }),
+  z.object({ status: z.literal("unavailable"), problem: UsageProblemSchema }),
+  z.object({ status: z.literal("error"), error: z.string() }),
+]);
+export const UsageReportEntrySchema = z.object({
+  id: z.string(),
+  account: z.object({ label: z.string().optional() }),
+  fetchedAt: z.string(),
+  sourceId: z.string(),
+  sourceLabel: z.string(),
+  icon: z.string().optional(),
+  report: UsageReportSchema,
+});
+export const UsageListReportsResponseMessageSchema = z.object({
+  type: z.literal("usage.list_reports.response"),
+  payload: z.object({ requestId: z.string(), reports: z.array(UsageReportEntrySchema) }),
 });
 
 const AgentSlashCommandSchema = z.object({
@@ -6894,6 +7029,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeResponseSchema,
   FileUnsubscribeResponseSchema,
   FileWriteResponseSchema,
+  CodeSymbolGetLocationsResponseSchema,
   FileEntryCreateResponseSchema,
   FileEntryRenameResponseSchema,
   FileEntryDuplicateResponseSchema,
@@ -6912,6 +7048,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
   ProviderUsageListResponseMessageSchema,
+  UsageListReportsResponseMessageSchema,
   ListCommandsResponseSchema,
   ListTerminalsResponseSchema,
   TerminalsChangedSchema,
@@ -7090,6 +7227,10 @@ export type ProviderDiagnosticResponseMessage = z.infer<
   typeof ProviderDiagnosticResponseMessageSchema
 >;
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
+export type UsageProblem = z.infer<typeof UsageProblemSchema>;
+export type UsageReport = z.infer<typeof UsageReportSchema>;
+export type UsageReportEntry = z.infer<typeof UsageReportEntrySchema>;
+export type UsageListReportsResponseMessage = z.infer<typeof UsageListReportsResponseMessageSchema>;
 export type ProviderUsageStatus = z.infer<typeof ProviderUsageStatusSchema>;
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 export type ProviderUsageWindow = z.infer<typeof ProviderUsageWindowSchema>;
@@ -7331,6 +7472,13 @@ export type FileUnsubscribeRequest = z.infer<typeof FileUnsubscribeRequestSchema
 export type FileUnsubscribeResponse = z.infer<typeof FileUnsubscribeResponseSchema>;
 export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 export type FileWriteResponse = z.infer<typeof FileWriteResponseSchema>;
+export type CodePosition = z.infer<typeof CodePositionSchema>;
+export type CodeRange = z.infer<typeof CodeRangeSchema>;
+export type CodeSymbolLocationKind = z.infer<typeof CodeSymbolLocationKindSchema>;
+export type CodeLocation = z.infer<typeof CodeLocationSchema>;
+export type CodeSymbolLocationsResult = z.infer<typeof CodeSymbolLocationsResultSchema>;
+export type CodeSymbolGetLocationsRequest = z.infer<typeof CodeSymbolGetLocationsRequestSchema>;
+export type CodeSymbolGetLocationsResponse = z.infer<typeof CodeSymbolGetLocationsResponseSchema>;
 export type FileEntryCreateRequest = z.infer<typeof FileEntryCreateRequestSchema>;
 export type FileEntryCreateResponse = z.infer<typeof FileEntryCreateResponseSchema>;
 export type FileEntryRenameRequest = z.infer<typeof FileEntryRenameRequestSchema>;
@@ -7411,10 +7559,17 @@ export const WSHelloMessageSchema = z.object({
   clientId: z.string().min(1),
   clientType: z.enum(["mobile", "browser", "cli", "mcp", "hub"]),
   protocolVersion: z.number().int(),
+  auth: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("password"), password: z.string() }),
+      z.object({ kind: z.literal("localCredential"), token: z.string() }),
+    ])
+    .optional(),
   appVersion: z.string().optional(),
   capabilities: z
     .object({
       voice: z.boolean().optional(),
+      [CLIENT_CAPS.helloRejection]: z.boolean().optional(),
       pushNotifications: z.boolean().optional(),
       [CLIENT_CAPS.explicitEventSubscriptions]: z.boolean().optional(),
       [CLIENT_CAPS.allProviders]: z.boolean().optional(),
@@ -7450,6 +7605,12 @@ export const WSSessionOutboundSchema = z.object({
   message: SessionOutboundMessageSchema,
 });
 
+export const WSHelloRejectedMessageSchema = z.object({
+  type: z.literal("hello.rejected"),
+  reason: z.enum(["password_required", "incorrect_password", "incompatible_protocol"]),
+  accepts: z.array(z.literal("password")),
+});
+
 // Complete WebSocket message schemas
 export const WSInboundMessageSchema = z.discriminatedUnion("type", [
   WSPingMessageSchema,
@@ -7461,6 +7622,7 @@ export const WSInboundMessageSchema = z.discriminatedUnion("type", [
 export const WSOutboundMessageSchema = z.discriminatedUnion("type", [
   WSPongMessageSchema,
   WSSessionOutboundSchema,
+  WSHelloRejectedMessageSchema,
 ]);
 
 export type WSInboundMessage = z.infer<typeof WSInboundMessageSchema>;

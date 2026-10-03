@@ -27,6 +27,7 @@ export const fr: TranslationResources = {
     total: "{{total}} résultats",
   },
   common: {
+    bottomSheetBackdrop: "Arrière-plan du panneau inférieur",
     back: "Dos",
     loading: "Chargement...",
     actions: {
@@ -445,7 +446,9 @@ export const fr: TranslationResources = {
       recovery: {
         archivedTitle: "Espace de travail archivé",
         restoreDescription:
-          "{{workspaceName}} a été archivé et son worktree supprimé. Restaurez la branche {{branch}} pour le rouvrir.",
+          "Restaurez {{workspaceName}} pour retrouver ses agents. Son worktree utilisera la branche {{branch}}.",
+        restoreWithoutBranchDescription:
+          "Restaurez {{workspaceName}} pour retrouver ses agents. Une nouvelle branche partira de la base enregistrée ou de la branche par défaut du dépôt.",
         unarchiveDescription: "{{workspaceName}} est archivé. Désarchivez-le pour le rouvrir.",
         restoreAction: "Restaurer",
         unarchiveAction: "Désarchiver",
@@ -1181,6 +1184,9 @@ export const fr: TranslationResources = {
       settings: "Paramètres",
       closeSidebar: "Fermer la barre latérale",
     },
+    footer: {
+      usage: "Utilisation",
+    },
     help: {
       trigger: "Aide et assistance",
       sectionHelp: "Aide",
@@ -1572,6 +1578,8 @@ export const fr: TranslationResources = {
     noFiles: "Aucun fichier ou répertoire trouvé",
     noCommands: "Aucune commande trouvée",
     failedToLoad: "Échec du chargement",
+    chooseProjectForCommands: "Choisissez un projet pour voir les commandes",
+    chooseModelForCommands: "Sélectionnez un modèle pour voir les commandes",
   },
   loadOlderHistory: {
     failed: "Impossible de charger l'ancien historique",
@@ -1663,6 +1671,21 @@ export const fr: TranslationResources = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "Mot de passe pour {{host}}",
+      label: "Mot de passe de l’hôte",
+    },
+    hostConfirmation: {
+      title: "Se connecter à cet hôte ?",
+      description:
+        "Cet hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      descriptionChanged:
+        "Ce lien modifie la façon dont vous vous connectez à cet hôte. L'hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      hostLabel: "Hôte",
+      fingerprintLabel: "Empreinte de la clé",
+      relayLabel: "Relais",
+      connect: "Se connecter",
+    },
     connectionMethods: {
       title: "Ajouter une connexion",
       direct: {
@@ -1893,6 +1916,37 @@ export const fr: TranslationResources = {
         reloadMessage: "Vos modifications locales seront perdues.",
       },
     },
+    codeNavigation: {
+      goToDefinition: "Aller à la définition",
+      findUsages: "Rechercher les utilisations",
+      copySymbol: "Copier « {{symbol}} »",
+      selectText: "Sélectionner du texte",
+      doneSelecting: "Terminé",
+      selectingHint: "Sélectionnez du texte à copier",
+      finding: "Recherche de {{symbol}}…",
+      opened: "{{location}} ouvert",
+      noDefinition: "Aucune définition trouvée pour {{symbol}}",
+      noUsages: "Aucune utilisation trouvée pour {{symbol}}",
+      unsupportedLanguage: "Aucun serveur de langage ne prend en charge ce type de fichier",
+      serverNotInstalled: "Installez {{commands}} sur l’hôte pour naviguer dans ce fichier",
+      containerNotRunning:
+        "Démarrez le conteneur de l’espace de travail pour naviguer dans son code",
+      notAWorkspace: "La navigation dans le code ne fonctionne que dans un espace de travail",
+      disabled: "La navigation dans le code est désactivée dans la configuration de l’hôte",
+      failed: "Échec de la navigation dans le code : {{message}}",
+      partial: "Indexation en cours, les résultats peuvent être incomplets",
+      truncated: "Affichage des {{count}} premiers résultats",
+      definitionsOf: "Définitions de {{symbol}}",
+      usagesOf: "Utilisations de {{symbol}}",
+      resultCount_one: "{{count}} résultat",
+      resultCount_other: "{{count}} résultats",
+      searching: "Recherche…",
+      refresh: "Actualiser",
+      containerOnly: "Uniquement dans le conteneur",
+      removedLine: "Les lignes supprimées ne sont plus sur le disque",
+      notOnDisk: "Disponible uniquement pour les modifications non validées",
+      orSeparator: " ou ",
+    },
     files: {
       label: "Fichiers",
       subtitle: "Fichiers de l’espace de travail",
@@ -2002,8 +2056,11 @@ export const fr: TranslationResources = {
     groupInfo: "À propos de{{title}}",
     sections: {
       general: "Général",
+      chat: "Discussion",
       appearance: "Apparence",
-      layout: en.settings.sections.layout,
+      sidebar: "Barre latérale",
+      terminal: "Terminal",
+      browser: "Navigateur",
       editor: "Éditeur",
       shortcuts: "Raccourcis",
       integrations: "Intégrations",
@@ -2062,6 +2119,7 @@ export const fr: TranslationResources = {
     },
     general: {
       title: "Général",
+      sending: "Envoi",
       browserData: {
         title: "Données du navigateur",
         siteData: "Cookies et données des sites",
@@ -2091,8 +2149,6 @@ export const fr: TranslationResources = {
         },
       },
       serviceUrls: {
-        label: "URL de services",
-        description: "Où ouvrir les URL à partir de scripts en cours d'exécution",
         options: {
           ask: "Demander",
           inApp: "DansPaseo",
@@ -2111,7 +2167,6 @@ export const fr: TranslationResources = {
       toolCallDetail: {
         label: "Affichage des appels d’outils",
         description: "Comment les appels d’outils apparaissent dans la chronologie",
-        accessibilityLabel: "Sélectionner l’affichage des appels d’outils ({{value}})",
         options: {
           overview: "Résumé",
           detailed: "Détails complets",
@@ -2215,8 +2270,16 @@ export const fr: TranslationResources = {
         description: "Afficher un plan pour passer d’une requête à l’autre",
       },
       sidebar: {
-        title: "Barre latérale",
-        description: "Choisissez les éléments affichés en haut de la barre latérale et leur ordre",
+        header: {
+          title: "En-tête",
+          description:
+            "Choisissez les éléments affichés en haut de la barre latérale et leur ordre",
+        },
+        footer: {
+          title: "Pied",
+          description:
+            "Choisissez les lignes affichées en bas de la barre latérale et leur ordre. Ajouter un projet et la rangée d’icônes restent toujours visibles",
+        },
         moveUp: "Déplacer vers le haut",
         moveDown: "Déplacer vers le bas",
       },
@@ -2240,6 +2303,14 @@ export const fr: TranslationResources = {
         codeSize: "Taille du code",
         codeSizeHint: "Utilisée pour le code, les diffs et la sortie du terminal",
         codeSizeAccessibility: "Taille de la police du code",
+      },
+      layout: {
+        title: "Mise en page",
+        contentWidth: "Largeur du contenu",
+        contentWidthHint: "Largeur maximale du chat et des fichiers Markdown sur les grands écrans",
+        contentWidthAccessibility: "Largeur du contenu en pixels",
+        reset: "Réinitialiser",
+        resetAccessibility: "Réinitialiser la largeur du contenu",
       },
       syntax: {
         title: "Syntaxe",
@@ -2352,6 +2423,10 @@ export const fr: TranslationResources = {
       },
     },
     host: {
+      password: {
+        guidance:
+          "Supprimez cet hôte puis ajoutez-le à nouveau avec le mot de passe demandé par ce daemon.",
+      },
       appearance: {
         title: "Apparence",
         name: {

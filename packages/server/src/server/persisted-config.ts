@@ -159,6 +159,25 @@ const FeatureWebUiSchema = z
   })
   .strict();
 
+const CodeNavigationServerConfigSchema = z
+  .object({
+    command: z.string().min(1).optional(),
+    args: z.array(z.string()).optional(),
+    extensions: z.array(z.string().min(1)).optional(),
+    languageId: z.string().min(1).optional(),
+    disabled: z.boolean().optional(),
+  })
+  .strict();
+
+export type CodeNavigationServerConfig = z.infer<typeof CodeNavigationServerConfigSchema>;
+
+const FeatureCodeNavigationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    servers: z.record(z.string().min(1), CodeNavigationServerConfigSchema).optional(),
+  })
+  .strict();
+
 const StructuredGenerationProviderConfigSchema = z
   .object({
     provider: z.string().min(1),
@@ -323,6 +342,7 @@ export const PersistedConfigSchema = z
         dictation: FeatureDictationSchema.optional(),
         voiceMode: FeatureVoiceModeSchema.optional(),
         webUi: FeatureWebUiSchema.optional(),
+        codeNavigation: FeatureCodeNavigationSchema.optional(),
       })
       .strict()
       .optional(),
