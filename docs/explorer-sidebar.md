@@ -15,8 +15,10 @@ fixed-target labels and icons from that registration, filter by host, and never 
 panel type for another. Tab moves reject unsupported destinations, and placement resolves only to
 a compatible pane.
 
-Files and Changes are the Explorer defaults and its singleton navigation views. Other compatible
-tabs, including agents, terminals, files, and diffs, can move between Explorer and main panes.
+Files and Changes are the Explorer defaults. Their panel manifests mark them as singletons,
+so a pane’s + menu omits each while that pane already contains it. Closing one makes its menu
+item available again. Other compatible tabs, including agents, terminals, files, and diffs,
+can move between Explorer and main panes.
 Keep panel implementations independent of either shell. `WorkspacePanelHost` owns mounting and
 retention, while each shell owns its tabs, focus, dragging, resizing, and shortcuts.
 
@@ -41,11 +43,13 @@ The persisted layout still contains the Explorer pane so tabs survive reloads. T
 that pane from the workspace split tree and docks it separately. Persisted identifiers retain the
 literal `"explorer"` pane id and `explorerPaneIdByWorkspace` key for compatibility.
 
-The tab rail has no inline add or close controls. Its context menu opens a New Tab launcher and
-toggles Files, Changes, and Explorer-compatible workspace-scoped plugin panels from the shared
-launch catalog. Individual tab menus close instances or move compatible tabs to main. Explorer tabs
-can be reordered, but the dock cannot be split. Selecting an Explorer tab does not change workspace
-focus.
+Explorer uses the shared workspace tab row and ordinary tab context menus. Files and Changes
+hide their close buttons through the panel manifest; close them from the tab context menu.
+Other tabs reveal the close control on hover. The + menu opens compatible panels in the dock and
+omits Agent and terminal profiles. Agents and terminals can still be dragged into Explorer.
+Bulk-close actions apply only to the dock's tabs. Explorer tabs can be reordered and dragged
+between compatible panes, but the dock cannot be split or maximized. Selecting an Explorer tab
+does not change workspace focus.
 
 Cmd+E shows or hides Explorer without changing its selected view. Compact layouts use the combined
 full-screen Explorer overlay for Changes, Files, and pull requests, and close it after a file opens. Compact Changes has no tree rail; its overview is the Jump to file action (`packages/app/src/git/jump-to-file/`), a sheet over the same changed-files tree the desktop rail renders.
@@ -91,3 +95,32 @@ desktop preference.
 Panels request an implicit open through the narrow `openPreferredTarget(target, source)` pane
 contract. Entry points outside panels use `openPreferredWorkspaceTarget`. Do not branch on a
 specific shell inside a panel.
+
+## Symlinks and the workspace boundary
+
+Every file-explorer operation resolves its path through `resolveScopedPath` in
+`packages/server/src/server/file-explorer/service.ts`, which canonicalises the request with
+`realpath` and rejects anything landing outside the workspace root. That check is the only thing
+confining the explorer — and, through the shared read, write, rename, delete, and download-token
+paths, confining writes as well — to the workspace, so it applies to symlink targets too.
+
+Listings classify an entry by the followed target, not by the `readdir` dirent. A dirent reports a
+symlink as neither file nor directory, so classifying from it labelled every symlinked directory a
+file and left it unopenable. Entries carry `isSymlink` when the name is a link.
+
+A link the boundary will not follow is listed with an `unavailable` reason rather than dropped:
+
+| Reason              | Cause                                         | Client behaviour                                          |
+| ------------------- | --------------------------------------------- | --------------------------------------------------------- |
+| `outside-workspace` | target canonicalises outside the root         | no actions; the row cannot be opened, renamed, or deleted |
+| `broken-link`       | target is missing, or the link cycles (ELOOP) | the link itself can still be renamed or deleted           |
+
+Unavailable entries report `kind: "file"` even when the target is a directory, so no client is
+invited to expand one, and `size: 0` — a symlink's own size is its target path's length, which
+would leak the shape of a target the client may not see. Only `lstat` on the link is consulted.
+
+An ordinary entry that fails to stat lost a race with its own deletion and stays out of the
+listing; only symlinks become placeholders.
+
+`packages/app/src/file-explorer/entry-availability.ts` maps those reasons to what the UI offers.
+Gate row actions through it rather than testing `unavailable` inline.

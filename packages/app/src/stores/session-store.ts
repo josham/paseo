@@ -230,6 +230,7 @@ function preserveMapIdentity<Key, Value>(
 }
 
 export type ExplorerEntryKind = "file" | "directory";
+export type ExplorerEntryUnavailableReason = "outside-workspace" | "broken-link";
 export type ExplorerFileKind = "text" | "image" | "binary";
 export type ExplorerEncoding = "utf-8" | "base64" | "none";
 
@@ -239,6 +240,8 @@ export interface ExplorerEntry {
   kind: ExplorerEntryKind;
   size: number;
   modifiedAt: string;
+  isSymlink?: boolean;
+  unavailable?: ExplorerEntryUnavailableReason;
 }
 
 export interface ExplorerFile {
@@ -283,6 +286,19 @@ export interface DaemonServerInfo {
   desktopManaged?: boolean;
   capabilities?: ServerCapabilities;
   features?: ServerInfoStatusPayload["features"];
+}
+
+export function toDaemonServerInfo(serverInfo: ServerInfoStatusPayload): DaemonServerInfo {
+  return {
+    serverId: serverInfo.serverId,
+    hostname: serverInfo.hostname ?? null,
+    version: serverInfo.version ?? null,
+    ...(serverInfo.desktopManaged !== undefined
+      ? { desktopManaged: serverInfo.desktopManaged }
+      : {}),
+    ...(serverInfo.capabilities ? { capabilities: serverInfo.capabilities } : {}),
+    ...(serverInfo.features ? { features: serverInfo.features } : {}),
+  };
 }
 
 export interface AgentTimelineCursorState {
