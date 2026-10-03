@@ -1,7 +1,11 @@
 import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
-import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+import type {
+  SessionEventSubscription,
+  UsageReportEntry,
+  ProviderUsage,
+} from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
 import { CreationService } from "./creation/index.js";
@@ -43,6 +47,7 @@ import type { BinaryFrame } from "@getpaseo/protocol/binary-frames/index";
 import { CursorError } from "./pagination/cursor.js";
 import { SortablePager, type SortSpec } from "./pagination/sortable-pager.js";
 import { matchesAgentHistoryQuery } from "./agent-history-search.js";
+import type { PromptHistoryStore } from "./prompt-history/store.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech/speech-provider.js";
 import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js";
 import {
@@ -175,6 +180,7 @@ import {
 } from "./session/checkout/git-metadata-generator.js";
 import { ScheduleSession } from "./session/schedule/schedule-session.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
+import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
@@ -226,7 +232,6 @@ import {
   type GitHubService,
 } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
-import type { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import {
   resolveWorkspaceRootAgent,
   summarizeFetchWorkspacesEntries,
@@ -461,6 +466,8 @@ export interface SessionOptions {
   workspaceLabelService?: WorkspaceLabelService;
   filesystem?: SessionFileSystem;
   scheduleService: ScheduleService;
+  /** Absent only in tests that never exercise prompt recall. */
+  promptHistory?: PromptHistoryStore;
   checkoutDiffManager: CheckoutDiffManager;
   github?: ForgeService;
   createAgentMcpTransport?: AgentMcpTransportFactory;
@@ -506,6 +513,11 @@ export interface SessionOptions {
     subscribeSettings?(listener: (pluginId: string, settingsId: string) => void): () => void;
     catalog(): Array<{ id: string; clientBundle: string }>;
     invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
+    listUsageReports(options?: {
+      forceRefresh?: boolean;
+      reportIds?: string[];
+    }): Promise<UsageReportEntry[]>;
+    listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
   mcpBaseUrl?: string | null;
@@ -514,7 +526,6 @@ export interface SessionOptions {
   tts: Resolvable<TextToSpeechProvider | null>;
   terminalManager: TerminalManager | null;
   providerSnapshotManager: ProviderSnapshotManager;
-  providerUsageService: ProviderUsageService;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
   serviceProxy?: ServiceProxySubsystem;
@@ -714,6 +725,7 @@ export class Session {
   private readonly agentStorage: AgentStorage;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
+  private readonly promptHistory: PromptHistoryStore | undefined;
   private readonly directorySync: DirectorySyncService;
   private readonly filesystem: SessionFileSystem;
   private readonly github: ForgeService;
@@ -778,6 +790,7 @@ export class Session {
   private readonly checkoutSession: CheckoutSession;
   private readonly scheduleSession: ScheduleSession;
   private readonly providerCatalogSession: ProviderCatalogSession;
+  private readonly usageSession: UsageSession;
   private readonly workspaceFilesSession: WorkspaceFilesSession;
   private readonly agentConfigSession: AgentConfigSession;
   private readonly projectConfigSession: ProjectConfigSession;
@@ -810,6 +823,7 @@ export class Session {
       agentStorage,
       projectRegistry,
       workspaceRegistry,
+      promptHistory,
       directorySync,
       workspaceLabelService,
       filesystem,
@@ -827,7 +841,6 @@ export class Session {
       tts,
       terminalManager,
       providerSnapshotManager,
-      providerUsageService,
       serviceProxy,
       scriptRuntimeStore,
       workspaceSetupSnapshots,
@@ -885,6 +898,7 @@ export class Session {
     this.agentStorage = agentStorage;
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
+    this.promptHistory = promptHistory;
     this.directorySync = resolveDirectorySync(directorySync);
     this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
     this.filesystem = filesystem ?? nodeSessionFileSystem;
@@ -984,7 +998,11 @@ export class Session {
         listDraftFeatures: (config) => this.agentManager.listDraftFeatures(config),
       },
       providerSnapshotManager,
-      providerUsageService,
+      logger: this.sessionLogger,
+    });
+    this.usageSession = new UsageSession({
+      emit: (msg) => this.emit(msg),
+      runtime: pluginRuntime,
       logger: this.sessionLogger,
     });
     this.agentConfigSession = new AgentConfigSession({
@@ -2996,7 +3014,9 @@ export class Session {
       case "provider_diagnostic_request":
         return this.providerCatalogSession.handleProviderDiagnosticRequest(msg);
       case "provider.usage.list.request":
-        return this.providerCatalogSession.handleProviderUsageListRequest(msg);
+        return this.usageSession.handleLegacyList(msg);
+      case "usage.list_reports.request":
+        return this.usageSession.handleListReports(msg);
       default:
         return undefined;
     }
@@ -3049,6 +3069,9 @@ export class Session {
         return;
       case "register_push_token":
         this.handleRegisterPushToken(msg.token);
+        return;
+      case "prompt.history.list.request":
+        await this.handlePromptHistoryListRequest(msg);
         return;
       case "push.unregister.request":
         this.pushNotifications.revoke(msg.token);
@@ -3820,6 +3843,64 @@ export class Session {
     }
   }
 
+  private async handlePromptHistoryListRequest(
+    msg: Extract<SessionInboundMessage, { type: "prompt.history.list.request" }>,
+  ): Promise<void> {
+    try {
+      const entries = this.promptHistory
+        ? await this.promptHistory.list({ projectKey: msg.projectKey, limit: msg.limit })
+        : [];
+      this.emit({
+        type: "prompt.history.list.response",
+        payload: {
+          projectKey: msg.projectKey,
+          entries,
+          error: null,
+          requestId: msg.requestId,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "prompt.history.list.response",
+        payload: {
+          projectKey: msg.projectKey,
+          entries: [],
+          error: error instanceof Error ? error.message : String(error),
+          requestId: msg.requestId,
+        },
+      });
+    }
+  }
+
+  /**
+   * Remember a prompt a person sent, for the composer's recall list. Recall is
+   * per project, so a prompt only lands once its agent resolves to a workspace;
+   * an agent outside the registry contributes nothing rather than landing in a
+   * bucket the composer will never ask for.
+   *
+   * Deliberately not awaited. Recall is a convenience, and a slow or failed
+   * write must never delay or fail the send it came from.
+   */
+  private recordPromptHistory(input: {
+    agentId?: string;
+    workspaceId?: string;
+    text: string;
+  }): void {
+    const store = this.promptHistory;
+    if (!store) return;
+    void (async () => {
+      const workspaceId =
+        input.workspaceId ??
+        (input.agentId ? (await this.agentStorage.get(input.agentId))?.workspaceId : undefined);
+      if (!workspaceId) return;
+      const workspace = await this.workspaceRegistry.get(workspaceId);
+      if (!workspace) return;
+      await store.record({ projectKey: workspace.projectId, text: input.text });
+    })().catch((error) => {
+      this.sessionLogger.warn({ err: error }, "Failed to record prompt history");
+    });
+  }
+
   /**
    * Handle text message to agent (with optional image attachments)
    */
@@ -3848,6 +3929,7 @@ export class Session {
       }`,
     );
 
+    this.recordPromptHistory({ agentId, text });
     const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
     const prompt = buildAgentPrompt(promptText, images, attachments);
 
@@ -4284,6 +4366,14 @@ export class Session {
         },
       );
       createdAgentId = snapshot.id;
+      // callerAgentId marks an agent spawned by another agent; only a person's
+      // opening prompt belongs in recall.
+      if (trimmedPrompt && !msg.callerAgentId) {
+        this.recordPromptHistory({
+          workspaceId: resolvedIntent.intent.workspaceId,
+          text: trimmedPrompt,
+        });
+      }
       await this.agentUpdates.forwardLiveAgent(snapshot);
       if (resolvedIntent.createdDirectoryWorkspace && trimmedPrompt) {
         this.workspaceAutoName.scheduleForDirectory(
@@ -8051,6 +8141,7 @@ export class Session {
     try {
       const agentId = resolved.agentId;
 
+      this.recordPromptHistory({ agentId, text: msg.text });
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       this.sessionLogger.trace(
         {
