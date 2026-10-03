@@ -102,6 +102,7 @@ import type { DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
 import { DirectorySyncService } from "./directory-sync/index.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import type { WorkspaceLabelService } from "./workspace-labels/index.js";
+import type { CodeNavigationService } from "./code-navigation/service.js";
 import {
   APPLICATION_SOCKET_LEASE_CHECK_INTERVAL_MS,
   ApplicationSocketLease,
@@ -596,6 +597,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly devContainerAvailable: boolean;
   private readonly launchStrategyRegistry: LaunchStrategyRegistry | null;
   private readonly containerBackends: ContainerBackendRegistry | null;
+  private readonly codeNavigation: CodeNavigationService | undefined;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -666,6 +668,7 @@ export class VoiceAssistantWebSocketServer {
     devContainerAvailable?: boolean,
     launchStrategyRegistry?: LaunchStrategyRegistry,
     containerBackends?: ContainerBackendRegistry,
+    codeNavigation?: CodeNavigationService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -686,6 +689,7 @@ export class VoiceAssistantWebSocketServer {
     this.devContainerAvailable = devContainerAvailable ?? false;
     this.launchStrategyRegistry = launchStrategyRegistry ?? null;
     this.containerBackends = containerBackends ?? null;
+    this.codeNavigation = codeNavigation;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
@@ -1496,6 +1500,7 @@ export class VoiceAssistantWebSocketServer {
       daemonConfigStore: this.daemonConfigStore,
       pluginRuntime: this.pluginRuntime,
       orchestrationSkills: this.orchestrationSkills,
+      codeNavigation: this.codeNavigation,
       mcpBaseUrl: this.mcpBaseUrl,
       stt: () => this.speech?.resolveStt() ?? null,
       sttLanguage: this.speech?.resolveSttLanguage() ?? "en",
@@ -1802,6 +1807,8 @@ export class VoiceAssistantWebSocketServer {
         directorySync: true,
         // COMPAT(workspaceLabels): added in v0.5.0, remove after 2027-08-14.
         ...(this.workspaceLabelService ? { workspaceLabels: true } : {}),
+        // COMPAT(codeNavigation): added in v0.9.3, remove gate after 2027-09-24.
+        ...(this.codeNavigation ? { codeNavigation: true } : {}),
         // COMPAT(workspaceSetupRun): added in v0.7.3, remove gate after 2027-09-02.
         workspaceSetupRun: true,
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.

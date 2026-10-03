@@ -15,6 +15,7 @@ import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
 import { openWorkspaceFileFromExplorer } from "@/screens/workspace/workspace-file-open-command";
+import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import { isWeb } from "@/constants/platform";
 import { DiffDocumentWorkspaceCacheProvider } from "@/git/diff-document/workspace-cache";
 import {
@@ -131,13 +132,13 @@ export function CompactExplorerSidebarHost({
     });
   }, [model, openCompactFileExplorer]);
 
-  const handleOpenFile = useCallback(
-    (filePath: string) => {
+  const handleOpenFileLocation = useCallback(
+    (location: WorkspaceFileLocation) => {
       if (!model) {
         return;
       }
       openWorkspaceFileFromExplorer({
-        filePath,
+        location,
         persistenceKey: model.persistenceKey,
         closeExplorerAfterOpen: presentation === "overlay",
         showMobileAgent,
@@ -146,6 +147,10 @@ export function CompactExplorerSidebarHost({
       });
     },
     [focusWorkspaceTab, model, openWorkspaceTabInFocusedPane, presentation, showMobileAgent],
+  );
+  const handleOpenFile = useCallback(
+    (filePath: string) => handleOpenFileLocation({ path: filePath }),
+    [handleOpenFileLocation],
   );
 
   const handleContainerLayout = useCallback((event: LayoutChangeEvent) => {
@@ -165,6 +170,7 @@ export function CompactExplorerSidebarHost({
             persistenceKey={model.persistenceKey}
             containerWidth={containerWidth}
             onOpenFile={handleOpenFile}
+            onOpenFileLocation={handleOpenFileLocation}
           />
         ) : (
           <CompactExplorerSidebar
@@ -173,6 +179,7 @@ export function CompactExplorerSidebarHost({
             workspaceRoot={model.workspaceRoot}
             isGit={model.isGit}
             onOpenFile={handleOpenFile}
+            onOpenFileLocation={handleOpenFileLocation}
           />
         )}
       </DiffDocumentWorkspaceCacheProvider>

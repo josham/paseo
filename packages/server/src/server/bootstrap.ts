@@ -119,6 +119,10 @@ export async function fanOutReconciledWorkspaceUpdates(input: {
 
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
+import {
+  createCodeNavigationService,
+  createConfigSettingsReader,
+} from "./code-navigation/service.js";
 import { createWorkspaceLabelService } from "./workspace-labels/index.js";
 import { createGitHubService } from "../services/github-service.js";
 import { createPaseoWorktree as createRegisteredPaseoWorktree } from "./paseo-worktree-service.js";
@@ -908,6 +912,12 @@ export async function createPaseoDaemon(
   const workspaceLabelService = createWorkspaceLabelService({
     paseoHome: config.paseoHome,
     workspaceRegistry,
+  });
+  const codeNavigation = createCodeNavigationService({
+    logger,
+    workspaceRegistry,
+    readSettings: createConfigSettingsReader({ paseoHome: config.paseoHome, logger }),
+    managedProcesses,
   });
   const github = createGitHubService();
   const workspaceGitService = new WorkspaceGitServiceImpl({
@@ -1818,6 +1828,7 @@ export async function createPaseoDaemon(
               devContainerAvailable,
               launchStrategyRegistry,
               containerBackends,
+              codeNavigation,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
@@ -1871,6 +1882,7 @@ export async function createPaseoDaemon(
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
       await agentProviderRuntime.shutdown().catch(() => undefined);
+      await codeNavigation.dispose().catch(() => undefined);
       if (mainStarted) {
         httpServer.closeAllConnections();
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
@@ -1905,6 +1917,7 @@ export async function createPaseoDaemon(
     await agentProviderRuntime.shutdown();
     await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
+    await codeNavigation.dispose();
     await speechService.stop();
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);

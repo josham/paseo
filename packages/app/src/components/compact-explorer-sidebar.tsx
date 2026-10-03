@@ -22,6 +22,8 @@ import {
   HEADER_TOP_PADDING_MOBILE,
   useIsCompactFormFactor,
 } from "@/constants/layout";
+import { useCodeNavigation } from "@/code-navigation/use-code-navigation";
+import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import { ChangesSurface } from "@/git/diff-pane";
 import { changesStateSchema, defaultChangesState, type ChangesState } from "@/panels/changes/state";
 import { FileExplorerPane } from "./file-explorer-pane";
@@ -58,6 +60,8 @@ interface ExplorerSidebarProps {
   workspaceRoot: string;
   isGit: boolean;
   onOpenFile?: (filePath: string) => void;
+  /** Opens a file at a line, for code navigation results. */
+  onOpenFileLocation: (location: WorkspaceFileLocation) => void;
 }
 
 interface ExplorerSidebarSharedState {
@@ -88,6 +92,7 @@ export function CompactExplorerSidebar({
   workspaceRoot,
   isGit,
   onOpenFile,
+  onOpenFileLocation,
 }: ExplorerSidebarProps) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
@@ -153,6 +158,7 @@ export function CompactExplorerSidebar({
           isGit={isGit}
           isOpen={isActive}
           onOpenFile={onOpenFile}
+          onOpenFileLocation={onOpenFileLocation}
         />
       </MobilePanelOverlay>
     </RetainedPanelActivity>
@@ -170,6 +176,7 @@ export function NativeExplorerSidebarDock({
   workspaceRoot,
   isGit,
   onOpenFile,
+  onOpenFileLocation,
   persistenceKey,
   containerWidth,
 }: NativeExplorerSidebarDockProps) {
@@ -264,6 +271,7 @@ export function NativeExplorerSidebarDock({
             isGit={isGit}
             isOpen={isOpen}
             onOpenFile={onOpenFile}
+            onOpenFileLocation={onOpenFileLocation}
           />
         </View>
       </Animated.View>
@@ -313,6 +321,7 @@ interface SidebarContentProps {
   isGit: boolean;
   isOpen: boolean;
   onOpenFile?: (filePath: string) => void;
+  onOpenFileLocation: (location: WorkspaceFileLocation) => void;
 }
 
 function ExplorerSidebarContent({
@@ -325,6 +334,7 @@ function ExplorerSidebarContent({
   isGit,
   isOpen,
   onOpenFile,
+  onOpenFileLocation,
 }: SidebarContentProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -427,6 +437,7 @@ function ExplorerSidebarContent({
               workspaceRoot={workspaceRoot}
               isOpen={isOpen}
               onOpenFile={onOpenFile}
+              onOpenFileLocation={onOpenFileLocation}
             />
           </RetainedPanel>
         ) : null}
@@ -461,25 +472,36 @@ function ChangedFilesPane({
   workspaceRoot,
   isOpen,
   onOpenFile,
+  onOpenFileLocation,
 }: Pick<
   SidebarContentProps,
-  "serverId" | "workspaceId" | "workspaceRoot" | "isOpen" | "onOpenFile"
+  "serverId" | "workspaceId" | "workspaceRoot" | "isOpen" | "onOpenFile" | "onOpenFileLocation"
 >) {
   const { addFile, canAddToChat } = useAddFileToChat({ serverId, workspaceId });
   const [changesState, setChangesState] = useState<ChangesState>(() =>
     changesStateSchema.parse(defaultChangesState),
   );
+  const { navigation, resultsSheet } = useCodeNavigation({
+    serverId,
+    workspaceId,
+    cwd: workspaceRoot,
+    openLocation: onOpenFileLocation,
+  });
   return (
-    <ChangesSurface
-      serverId={serverId}
-      workspaceId={workspaceId}
-      cwd={workspaceRoot}
-      enabled={isOpen}
-      onOpenFile={onOpenFile}
-      onAddToChat={canAddToChat ? addFile : undefined}
-      state={changesState}
-      onStateChange={setChangesState}
-    />
+    <>
+      <ChangesSurface
+        serverId={serverId}
+        workspaceId={workspaceId}
+        cwd={workspaceRoot}
+        enabled={isOpen}
+        onOpenFile={onOpenFile}
+        onAddToChat={canAddToChat ? addFile : undefined}
+        state={changesState}
+        onStateChange={setChangesState}
+        codeNavigation={navigation}
+      />
+      {resultsSheet}
+    </>
   );
 }
 
