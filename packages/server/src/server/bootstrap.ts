@@ -4,7 +4,7 @@ import { createServer as createHTTPServer, type IncomingMessage, type ServerResp
 import { constants, existsSync, unlinkSync } from "fs";
 import { open, rm, stat } from "fs/promises";
 import { randomUUID } from "node:crypto";
-import { hostname as getHostname } from "node:os";
+import { getHostName } from "./host-name.js";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Logger } from "pino";
@@ -206,6 +206,7 @@ import {
   isAgentMcpRequestAuthorized,
   type DaemonAuthConfig,
 } from "./auth.js";
+import { deleteLocalCredential, writeLocalCredential } from "./local-credential.js";
 import { createWebUiMiddleware } from "./web-ui.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
@@ -230,6 +231,7 @@ import {
 } from "./hub/relationship-remote.js";
 import { DaemonExecutions } from "./hub/daemon-executions.js";
 import { PluginService } from "./plugins/index.js";
+import { BuiltinPluginLoader } from "./plugins/builtin/index.js";
 import { ManagedPluginSources } from "./plugins/managed-source.js";
 
 const MCP_DEBUG_BATCH_LIMIT = 10;
@@ -475,6 +477,7 @@ export interface PaseoDaemon {
 }
 
 export interface PaseoDaemonDependencies {
+  builtinPlugins?: BuiltinPluginLoader;
   hubRelationshipRemote?: HubRelationshipRemote;
   hubRelationshipClock?: HubRelationshipClock;
   hubRelationshipRetryPolicy?: HubRelationshipRetryPolicy;
@@ -483,6 +486,10 @@ export interface PaseoDaemonDependencies {
     daemonStatusRpc?: boolean;
     relayConfig?: boolean;
   };
+}
+
+function resolveBuiltinPluginLoader(dependencies: PaseoDaemonDependencies): BuiltinPluginLoader {
+  return dependencies.builtinPlugins ?? new BuiltinPluginLoader();
 }
 
 function createBootstrapManagedProcessRegistry(
@@ -516,7 +523,7 @@ function mountWebUi(app: express.Application, config: PaseoDaemonConfig, logger:
     createWebUiMiddleware({
       enabled: config.webUi?.enabled ?? false,
       distDir: config.webUi?.distDir ?? null,
-      label: getHostname(),
+      label: getHostName(),
       logger,
     }),
   );
@@ -610,6 +617,7 @@ export async function createPaseoDaemon(
   const browserToolsBroker = new BrowserToolsBroker({});
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
     managedSources: new ManagedPluginSources(config.paseoHome),
+    builtinPlugins: resolveBuiltinPluginLoader(dependencies),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
   });
 
@@ -764,8 +772,10 @@ export async function createPaseoDaemon(
   // remain protected.
   mountWebUi(app, config, logger);
 
+  let localCredential: string | null = null;
+  const daemonAuth = { ...config.auth, localCredential: () => localCredential };
   app.use(
-    createRequireBearerMiddleware(config.auth, (context) => {
+    createRequireBearerMiddleware(daemonAuth, (context) => {
       logger.warn(context, "Rejected HTTP request with invalid daemon password");
     }),
   );
@@ -784,7 +794,7 @@ export async function createPaseoDaemon(
     res.json({
       status: "server_info",
       serverId,
-      hostname: getHostname(),
+      hostname: getHostName(),
       version: daemonVersion,
       listen: formatListenTarget(boundListenTarget ?? listenTarget),
     });
@@ -1225,7 +1235,7 @@ export async function createPaseoDaemon(
   });
   const hubRelationships = new HubRelationshipController({
     paseoHome: config.paseoHome,
-    hostname: getHostname(),
+    hostname: getHostName(),
     serverId,
     daemonPublicKey: daemonKeyPair.publicKeyB64,
     logger,
@@ -1576,6 +1586,7 @@ export async function createPaseoDaemon(
   const start = async () => {
     let mainStarted = false;
     try {
+      localCredential = await writeLocalCredential(config.paseoHome);
       if (serviceProxyListenTarget) {
         const boundServiceProxyTarget = await serviceProxy.startStandalone({
           listenTarget: serviceProxyListenTarget,
@@ -1669,7 +1680,7 @@ export async function createPaseoDaemon(
                 startPaused: true,
               },
               workspaceAutoName,
-              config.auth,
+              daemonAuth,
               speechService,
               terminalManager,
               {
@@ -1723,6 +1734,7 @@ export async function createPaseoDaemon(
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
+            providerSnapshotManager.settlePluginProviders();
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
@@ -1766,6 +1778,8 @@ export async function createPaseoDaemon(
       speechService.start();
       scriptHealthMonitor.start();
     } catch (error) {
+      localCredential = null;
+      await deleteLocalCredential(config.paseoHome);
       unsubscribePluginProviders();
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
@@ -1779,6 +1793,8 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    localCredential = null;
+    await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins
     // down, so plugin shutdown cannot withdraw a provider from under an agent
     // that is still open. Plugins themselves are stopped once every session
@@ -1791,6 +1807,11 @@ export async function createPaseoDaemon(
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
     await closeAllAgents(logger, agentManager);
+    await withTimeout({
+      promise: pluginRuntime.drainEvents(),
+      timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
+      label: "drain plugin lifecycle events",
+    }).catch((error) => logger.warn({ err: error }, "Plugin lifecycle events did not finish"));
     await agentManager.flushForShutdown().catch(() => undefined);
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
