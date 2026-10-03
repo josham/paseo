@@ -6,11 +6,14 @@ import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRouting
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -25,6 +28,16 @@ class AudioEngine (context: Context) {
     private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
 
+    /**
+     * How much uninterrupted digital silence means the capture route is dead rather than quiet.
+     * Two seconds of PCM16 at [SAMPLE_RATE]; see [trackSilentRoute] for why exact zeros are a
+     * safe discriminator.
+     */
+    private val SILENT_ROUTE_TRIP_BYTES = SAMPLE_RATE * 2 * 2L
+
+    /** Payload for [onAudioInterruptionCallback] when capture is running but reads only zeros. */
+    private val MIC_SILENT_INTERRUPTION = "micSilent"
+
     private lateinit var audioRecord: AudioRecord
     private lateinit var audioManager: AudioManager
     private lateinit var audioTrack: AudioTrack
@@ -36,6 +49,9 @@ class AudioEngine (context: Context) {
     private val executorServicePlayback = Executors.newFixedThreadPool(1)
     private var speakerDevice: AudioDeviceInfo? = null
     private var communicationRouteActive = false
+    private var silentRouteBytes = 0L
+    private var silentRouteRepinned = false
+    private var silentRouteReported = false
     private var bridgeWindowStartedAtMs = System.currentTimeMillis()
     private var micEvents = 0
     private var micBytes = 0L
@@ -130,46 +146,110 @@ class AudioEngine (context: Context) {
         }
     }
 
+    /**
+     * Choose the device that carries the call.
+     *
+     * This steers **capture** as well as playback: `setCommunicationDevice` moves the input
+     * route too, and the recorder is opened on `VOICE_COMMUNICATION` (see [startRecording]),
+     * which follows it. That is why the candidates come from `availableCommunicationDevices`
+     * rather than `GET_DEVICES_OUTPUTS`.
+     *
+     * The output list contains `TYPE_BLUETOOTH_A2DP` and `TYPE_WIRED_HEADPHONES`, both
+     * output-only profiles with no microphone, and this used to take whichever came first.
+     * Selecting one as the communication device makes Android bring up an SCO/HFP link to
+     * satisfy the capture side; when the headset is out of range, or has no HFP at all, the
+     * recorder still reports `STATE_INITIALIZED` and then reads digital silence for the whole
+     * dictation with nothing thrown and nothing logged. `availableCommunicationDevices` is by
+     * definition the set `setCommunicationDevice` accepts, so a microphone-less device cannot
+     * be chosen from it.
+     *
+     * Picking a valid communication device still does not make it the right *microphone*, so
+     * the input is pinned separately in [applyPreferredInputDevice].
+     */
+    @SuppressLint("NewApi")
     private fun updateAudioRouting() {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        var isExternalDeviceConnected = false
-        var selectedDevice: AudioDeviceInfo? = null
-
-        for (device in devices) {
-            if (device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                speakerDevice = device
-            }
-            if (device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
-                isExternalDeviceConnected = true
-                selectedDevice = device
-                break
-            } else if (device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                selectedDevice = device
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Use the modern API for Android S and above
-            try {
-                selectedDevice?.let {
-                    audioManager.setCommunicationDevice(it)
-                }
-            }catch (e:Exception){
-                Log.e("AudioEngine", "Error setting communication device. Using speaker")
-                speakerDevice?.let {
-                    audioManager.setCommunicationDevice(it)
-                }
-            }
-
-        } else {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             // Fall back to deprecated method for older Android versions
             @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = !isExternalDeviceConnected
+            audioManager.isSpeakerphoneOn = !hasExternalOutputDevice()
+            return
+        }
+
+        val candidates = audioManager.availableCommunicationDevices
+        speakerDevice = candidates.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+
+        val selectedDevice =
+            candidates.firstOrNull { isExternalCommunicationDevice(it) } ?: speakerDevice
+        if (selectedDevice == null) {
+            Log.w("AudioEngine", "No communication device offered; leaving the system route alone")
+            return
+        }
+
+        try {
+            audioManager.setCommunicationDevice(selectedDevice)
+        } catch (e: Exception) {
+            Log.e(
+                "AudioEngine",
+                "Error setting communication device ${selectedDevice.type}. Using speaker",
+                e
+            )
+            speakerDevice?.let {
+                audioManager.setCommunicationDevice(it)
+            }
         }
     }
+
+    /** Communication devices that carry both directions, so capture can safely follow them. */
+    private fun isExternalCommunicationDevice(device: AudioDeviceInfo): Boolean =
+        when (device.type) {
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_HEARING_AID -> true
+            else -> false
+        }
+
+    private fun hasExternalOutputDevice(): Boolean =
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+
+    /**
+     * Pin the microphone explicitly rather than inheriting whatever the call route implies.
+     *
+     * `AudioRecord.setPreferredDevice` is the only API that addresses the input on its own, and
+     * without it a dead call route takes the capture path down with it silently. Pass
+     * [forceBuiltin] to ignore attached headsets entirely, which is how [trackSilentRoute]
+     * recovers from a headset that has stopped delivering audio.
+     */
+    private fun applyPreferredInputDevice(record: AudioRecord, forceBuiltin: Boolean) {
+        val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val builtinMic = inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+
+        val preferred =
+            if (forceBuiltin) builtinMic
+            else inputs.firstOrNull { isExternalInputDevice(it) } ?: builtinMic
+
+        if (preferred == null) {
+            Log.w("AudioEngine", "No input device reported; leaving capture on the default route")
+            return
+        }
+        if (!record.setPreferredDevice(preferred)) {
+            Log.w("AudioEngine", "Device ${preferred.type} refused as the preferred input")
+        }
+    }
+
+    /** Input devices with a real microphone. A2DP and plain headphones are deliberately absent. */
+    private fun isExternalInputDevice(device: AudioDeviceInfo): Boolean =
+        when (device.type) {
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> true
+            else -> false
+        }
 
     @SuppressLint("NewApi")
     private fun activateCommunicationRoute() {
@@ -326,6 +406,20 @@ class AudioEngine (context: Context) {
             throw RuntimeException("Audio Record can't initialize!")
         }
 
+        applyPreferredInputDevice(audioRecord, forceBuiltin = false)
+
+        // A route that changes under a live recorder resets the silence watchdog: the new
+        // device deserves its own two seconds before being called dead. The handler is pinned
+        // to the main looper because startRecording runs on a bare executor thread, which has
+        // no Looper of its own for the listener to post to.
+        audioRecord.addOnRoutingChangedListener(
+            AudioRouting.OnRoutingChangedListener { routing ->
+                Log.d("AudioEngine", "Capture route changed to ${routing.routedDevice?.type}")
+                silentRouteBytes = 0L
+            },
+            Handler(Looper.getMainLooper())
+        )
+
         if (AcousticEchoCanceler.isAvailable()){
             echoCanceler = AcousticEchoCanceler.create(audioRecord.audioSessionId)
             if (echoCanceler != null) {
@@ -341,6 +435,10 @@ class AudioEngine (context: Context) {
                 Log.i("AudioEngine", "Noise Suppressor enabled")
             }
         }
+
+        silentRouteBytes = 0L
+        silentRouteRepinned = false
+        silentRouteReported = false
 
         audioRecord.startRecording()
         isRecording = true
@@ -362,6 +460,7 @@ class AudioEngine (context: Context) {
                         val micVolume = calculateRMSLevel(data)
                         onInputVolumeCallback?.invoke(micVolume)
                         onMicDataCallback?.invoke(data)
+                        trackSilentRoute(data)
                     }
                 }
                 Log.d("AudioEngine", "Mic sample tap stopped.")
@@ -372,6 +471,60 @@ class AudioEngine (context: Context) {
                 throw e
             }
         }
+    }
+
+    /**
+     * Notice a capture route that has gone dead while the recorder still looks healthy.
+     *
+     * A microphone in a quiet room still dithers, and neither the echo canceler nor the noise
+     * suppressor gates its output to zero, so a sustained run of *exact* zero samples means no
+     * device is feeding the recorder rather than that nobody is speaking. That is precisely what
+     * a Bluetooth headset outside SCO range produces, and on its own it is undetectable from the
+     * app's side: `read()` keeps returning full buffers on schedule and nothing raises an error.
+     *
+     * The first trip re-pins capture to the built-in microphone, recovering the common case of a
+     * headset that walked out of range. If the built-in microphone is silent too there is nothing
+     * left to try, so it tells JS once and lets the user see "no audio" instead of a dictation
+     * that transcribes to nothing.
+     */
+    private fun trackSilentRoute(data: ByteArray) {
+        if (silentRouteReported) {
+            return
+        }
+
+        if (data.any { it.toInt() != 0 }) {
+            silentRouteBytes = 0L
+            return
+        }
+
+        silentRouteBytes += data.size.toLong()
+        if (silentRouteBytes < SILENT_ROUTE_TRIP_BYTES) {
+            return
+        }
+        silentRouteBytes = 0L
+
+        if (!silentRouteRepinned) {
+            silentRouteRepinned = true
+            Log.w(
+                "AudioEngine",
+                "Capture route delivered only silence; re-pinning to the built-in microphone"
+            )
+            try {
+                if (isRecording) {
+                    applyPreferredInputDevice(audioRecord, forceBuiltin = true)
+                }
+            } catch (e: Exception) {
+                // stopRecording() can release the recorder from another thread while we are
+                // here. Losing the re-pin is harmless; letting it reach the tap's catch would
+                // tear down the whole engine.
+                Log.w("AudioEngine", "Could not re-pin the input device", e)
+            }
+            return
+        }
+
+        silentRouteReported = true
+        Log.e("AudioEngine", "Built-in microphone is silent too; reporting a dead capture route")
+        onAudioInterruptionCallback?.invoke(MIC_SILENT_INTERRUPTION)
     }
 
     private fun stopRecording() {
