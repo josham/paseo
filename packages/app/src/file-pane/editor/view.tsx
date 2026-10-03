@@ -2,6 +2,7 @@ import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { HighlightStyle } from "@getpaseo/highlight";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
+import type { SymbolActions } from "@/code-navigation/symbol-actions";
 import type { FileEditorModel } from "./model";
 
 export function FileEditorView(_props: {
@@ -22,6 +23,7 @@ export function FileEditorView(_props: {
   };
   onCursorChange(position: { line: number; column: number }): void;
   onVimModeChange(mode: string | null): void;
+  symbolActions: SymbolActions | null;
 }) {
   return (
     <View style={styles.container}>

@@ -195,6 +195,7 @@ import { ScheduleSession } from "./session/schedule/schedule-session.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
 import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
+import type { CodeNavigationService } from "./code-navigation/service.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
 import { DaemonSession, type DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
@@ -533,6 +534,7 @@ export interface SessionOptions {
     listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
+  codeNavigation?: CodeNavigationService;
   mcpBaseUrl?: string | null;
   stt: Resolvable<SpeechToTextProvider | null>;
   sttLanguage?: string;
@@ -767,6 +769,7 @@ export class Session {
   private readonly pushNotifications: PushNotifications;
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly codeNavigation: SessionOptions["codeNavigation"];
   private unsubscribeAgentEvents: (() => void) | null = null;
   private unsubscribeProjectMutations: (() => void) | null = null;
   private unsubscribePluginChanges: (() => void) | null = null;
@@ -868,6 +871,7 @@ export class Session {
       daemonConfigStore,
       pluginRuntime,
       orchestrationSkills,
+      codeNavigation,
       stt,
       sttLanguage,
       tts,
@@ -913,6 +917,7 @@ export class Session {
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.codeNavigation = codeNavigation;
     this.sessionLogger = logger.child({
       module: "session",
       clientId: this.clientId,
@@ -3078,9 +3083,24 @@ export class Session {
       case "file.upload.request":
         this.workspaceFilesSession.handleFileUploadRequest(msg, this.delivery);
         return undefined;
+      case "code.symbol.get_locations.request":
+        return this.codeNavigation
+          ? this.handleCodeSymbolGetLocationsRequest(this.codeNavigation, msg)
+          : undefined;
       default:
         return undefined;
     }
+  }
+
+  private async handleCodeSymbolGetLocationsRequest(
+    codeNavigation: CodeNavigationService,
+    request: Extract<SessionInboundMessage, { type: "code.symbol.get_locations.request" }>,
+  ): Promise<void> {
+    const result = await codeNavigation.getLocations(request);
+    this.emit({
+      type: "code.symbol.get_locations.response",
+      payload: { result, requestId: request.requestId },
+    });
   }
 
   private dispatchWorkspaceStateMessage(msg: SessionInboundMessage): Promise<void> | undefined {
