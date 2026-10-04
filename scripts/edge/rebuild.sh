@@ -77,6 +77,15 @@ merge_branch() {
     mapfile -t unmerged < <(git ls-files --unmerged | awk '{ print $4 }' | sort -u)
     replayed=$(( ${#unmerged[@]} > 0 ))
     for path in "${unmerged[@]}"; do
+      # A modify/delete conflict also looks replayed: git leaves the modifying
+      # side's copy in the tree, with no markers, and staging it would bring back
+      # a file the other side deleted. rerere only resolves conflicts that have
+      # both sides, so a path missing stage 2 ("ours") or 3 ("theirs") is not one.
+      stages="$(git ls-files --unmerged -- "$path" | awk '{ print $3 }' | sort -u | tr -d '\n')"
+      if [[ "$stages" != *2*3* ]]; then
+        replayed=0
+        break
+      fi
       # A *binary* conflict looks exactly like a replayed resolution: git writes
       # the "ours" side out and adds no markers, so the two tests below both pass
       # while the branch being merged has silently lost its version of the file.
