@@ -6,6 +6,12 @@ import { expandUserPath, resolvePathFromBase } from "../path-utils.js";
 import { runGitCommand } from "../../utils/run-git-command.js";
 
 export type ExplorerEntryKind = "file" | "directory";
+/**
+ * Why an entry is listed but cannot be opened. Both cases are symlinks the
+ * workspace boundary refuses to follow; listing them with a reason beats
+ * dropping them, which made links look like they had silently vanished.
+ */
+export type ExplorerEntryUnavailableReason = "outside-workspace" | "broken-link";
 export type ExplorerFileKind = "text" | "image" | "binary";
 export type ExplorerEncoding = "utf-8" | "base64" | "none";
 
@@ -48,6 +54,8 @@ export interface FileExplorerEntry {
   kind: ExplorerEntryKind;
   size: number;
   modifiedAt: string;
+  isSymlink?: boolean;
+  unavailable?: ExplorerEntryUnavailableReason;
 }
 
 export interface FileExplorerDirectory {
@@ -137,7 +145,14 @@ interface EntryPayloadParams {
   root: string;
   targetPath: string;
   name: string;
-  kind: ExplorerEntryKind;
+  isSymlink: boolean;
+}
+
+interface UnavailableEntryPayloadParams {
+  root: string;
+  targetPath: string;
+  name: string;
+  reason: ExplorerEntryUnavailableReason;
 }
 
 export async function listDirectoryEntries({
@@ -156,21 +171,26 @@ export async function listDirectoryEntries({
   const entriesWithNulls = await Promise.all(
     dirents.map(async (dirent) => {
       const targetPath = path.join(directoryPath.requestedPath, dirent.name);
-      const kind: ExplorerEntryKind = dirent.isDirectory() ? "directory" : "file";
+      const isSymlink = dirent.isSymbolicLink();
       try {
         return await buildEntryPayload({
           root,
           targetPath,
           name: dirent.name,
-          kind,
+          isSymlink,
         });
       } catch (error) {
-        // Directories can contain dangling links (e.g. AGENTS.md -> CLAUDE.md).
-        // Skip entries whose targets disappeared instead of failing the whole listing.
-        if (isMissingEntryError(error) || isOutsideWorkspaceError(error)) {
+        const reason = unavailableReason(error);
+        if (!reason) {
+          throw error;
+        }
+        // A plain entry that fails to stat lost a race with its own deletion and
+        // is genuinely gone, so it stays out of the listing. A symlink that fails
+        // is still on disk — surface it as unopenable rather than hiding it.
+        if (!isSymlink) {
           return null;
         }
-        throw error;
+        return await buildUnavailableEntryPayload({ root, targetPath, name: dirent.name, reason });
       }
     }),
   );
@@ -832,20 +852,62 @@ async function buildEntryPayload({
   root,
   targetPath,
   name,
-  kind,
+  isSymlink,
 }: EntryPayloadParams): Promise<FileExplorerEntry> {
   const entryPath = await resolveScopedPath({
     root,
     relativePath: normalizeRelativePath({ root, targetPath }),
   });
+  // Classify by the followed target, not the dirent: readdir reports a symlink
+  // to a directory as neither file nor directory, and calling it a file leaves
+  // it unopenable in the explorer.
   const stats = await fs.stat(entryPath.resolvedPath);
   return {
     name,
     path: normalizeRelativePath({ root, targetPath }),
-    kind,
+    kind: stats.isDirectory() ? "directory" : "file",
     size: stats.size,
     modifiedAt: stats.mtime.toISOString(),
+    ...(isSymlink ? { isSymlink: true } : {}),
   };
+}
+
+/**
+ * A symlink the boundary refuses to follow. Everything reported here comes from
+ * `lstat` on the link itself, never the target: the client is not allowed to see
+ * the target, and the link's own size is its target path's length, which would
+ * leak that target's shape. Returns null if the link vanished mid-listing.
+ */
+async function buildUnavailableEntryPayload({
+  root,
+  targetPath,
+  name,
+  reason,
+}: UnavailableEntryPayloadParams): Promise<FileExplorerEntry | null> {
+  const stats = await fs.lstat(targetPath).catch(() => null);
+  if (!stats) {
+    return null;
+  }
+  return {
+    name,
+    path: normalizeRelativePath({ root, targetPath }),
+    kind: "file",
+    size: 0,
+    modifiedAt: stats.mtime.toISOString(),
+    isSymlink: true,
+    unavailable: reason,
+  };
+}
+
+function unavailableReason(error: unknown): ExplorerEntryUnavailableReason | null {
+  if (isOutsideWorkspaceError(error)) {
+    return "outside-workspace";
+  }
+  // Includes ELOOP: a link that cycles resolves to nothing openable either.
+  if (isMissingEntryError(error)) {
+    return "broken-link";
+  }
+  return null;
 }
 
 function isMissingEntryError(error: unknown): boolean {
