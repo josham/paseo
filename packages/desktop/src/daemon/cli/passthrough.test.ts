@@ -82,6 +82,16 @@ describe("passthrough CLI", () => {
     ).toEqual(["daemon", "status"]);
   });
 
+  it("ignores the --updated flag the Windows installer passes when relaunching after an update", () => {
+    expect(
+      parsePassthroughCliArgs({
+        argv: ["C:\\Users\\user\\AppData\\Local\\Programs\\Paseo\\Paseo.exe", "--updated"],
+        isDefaultApp: false,
+        forceCli: false,
+      }),
+    ).toBeNull();
+  });
+
   it("ignores Electron remote debugging switches", () => {
     expect(
       parsePassthroughCliArgs({
