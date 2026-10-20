@@ -34,6 +34,8 @@ import {
   stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit,
 } from "@/utils/host-route-browser";
 import { prepareWorkspaceTab } from "@/utils/workspace-navigation";
+import { workspaceOpenIntentTargetsOtherWorkspace } from "@/utils/workspace-open-intent";
+import { useSessionStore } from "@/stores/session-store";
 import { isNative, isWeb } from "@/constants/platform";
 import { RenderProfile } from "@/utils/render-profiler";
 
@@ -116,6 +118,16 @@ function HostWorkspaceRouteContent() {
   const workspaceExists = useWorkspaceExists(serverId, workspaceId);
   const openIntent = useMemo(() => parseWorkspaceOpenIntent(openValue), [openValue]);
   const isAgentOpenIntent = openIntent?.kind === "agent";
+  const openIntentAgentId = openIntent?.kind === "agent" ? openIntent.agentId : null;
+  const openIntentAgentWorkspaceId = useSessionStore((state) => {
+    if (!openIntentAgentId) {
+      return null;
+    }
+    const session = state.sessions[serverId];
+    const agent =
+      session?.agents.get(openIntentAgentId) ?? session?.agentDetails.get(openIntentAgentId);
+    return agent?.workspaceId ?? null;
+  });
   const isOpenIntentWaitingForWorkspace = Boolean(
     isAgentOpenIntent && (!hasHydratedWorkspaces || !workspaceExists),
   );
@@ -152,7 +164,18 @@ function HostWorkspaceRouteContent() {
     }
     consumedIntentRef.current = consumptionKey;
 
-    if (openIntent) {
+    // A deferred intent can reach a workspace it was not issued for: it survives the
+    // navigation that was waiting for the directory, and `open` comes from the global URL
+    // while this route's workspace comes from local params. Drop it rather than pin an
+    // agent of another workspace into this one, where reconciliation never removes it.
+    if (
+      openIntent &&
+      !workspaceOpenIntentTargetsOtherWorkspace({
+        intent: openIntent,
+        workspaceId,
+        agentWorkspaceId: openIntentAgentWorkspaceId,
+      })
+    ) {
       prepareWorkspaceTab({
         serverId,
         workspaceId,
@@ -176,6 +199,7 @@ function HostWorkspaceRouteContent() {
     isOpenIntentWaitingForWorkspace,
     navigation,
     openIntent,
+    openIntentAgentWorkspaceId,
     openValue,
     rootNavigationState?.key,
     serverId,
