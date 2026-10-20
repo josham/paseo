@@ -1,5 +1,5 @@
 import { Text, View } from "react-native";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import invariant from "tiny-invariant";
 import { useTranslation } from "react-i18next";
 import { FilePane } from "@/file-pane/pane";
@@ -7,6 +7,7 @@ import { usePaneContext } from "@/panels/pane-context";
 import { definePanel } from "@/panels/panel-registry";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { createMaterialFileIcon } from "@/components/material-file-icon";
+import type { WorkspaceFileLocation } from "@/workspace/file-open";
 
 const CENTERED_PADDED_STYLE = {
   flex: 1,
@@ -30,8 +31,13 @@ function useFilePanelDescriptor(target: { kind: "file"; path: string }) {
 
 function FilePanel() {
   const { t } = useTranslation();
-  const { serverId, workspaceId, target, fileNavigationRevision } = usePaneContext();
+  const { serverId, workspaceId, target, fileNavigationRevision, openFileInWorkspace } =
+    usePaneContext();
   const workspaceDirectory = useWorkspaceDirectory(serverId, workspaceId);
+  const openFileLocation = useCallback(
+    (location: WorkspaceFileLocation) => openFileInWorkspace({ location, disposition: "main" }),
+    [openFileInWorkspace],
+  );
   invariant(target.kind === "file", "FilePanel requires file target");
   if (!workspaceDirectory) {
     return (
@@ -43,7 +49,9 @@ function FilePanel() {
   return (
     <FilePane
       serverId={serverId}
+      workspaceId={workspaceId}
       workspaceRoot={workspaceDirectory}
+      openFileLocation={openFileLocation}
       location={target}
       navigationRevision={fileNavigationRevision ?? 0}
     />

@@ -34,6 +34,7 @@ import { type ParsedDiffFile } from "@/git/use-diff-query";
 import type { ChangesState } from "@/panels/changes/state";
 import { defaultChangesState } from "@/panels/changes/state";
 import { ReviewCommentSheet, ReviewFeedbackAction } from "@/review";
+import type { CodeNavigation } from "@/code-navigation/use-code-navigation";
 import { DiffDocument, type WorkingDiffMode } from "@/git/diff-document";
 import { ChangedFilesTree } from "@/git/changed-files-tree";
 import { JUMP_TO_FILE_CLEARANCE, JumpToFile } from "@/git/jump-to-file";
@@ -191,6 +192,8 @@ interface ChangesSurfaceProps {
   onAddToChat?: (path: string) => void;
   state?: ChangesState;
   onStateChange?: (state: ChangesState) => void;
+  /** Go to definition and Find usages from diff lines; null when the host cannot navigate. */
+  codeNavigation?: CodeNavigation | null;
 }
 
 type PressableStyleFn = (
@@ -1451,6 +1454,7 @@ export function ChangesSurface({
   onAddToChat,
   state: changesState,
   onStateChange,
+  codeNavigation,
 }: ChangesSurfaceProps) {
   const { settings: appSettings } = useAppSettings();
   const { preferences, updatePreferences } = useChangesPreferences();
@@ -1712,8 +1716,13 @@ export function ChangesSurface({
       onDownload: handleDownloadPath,
       onDuplicate: fsEntryDuplicateEnabled ? handleDuplicatePath : undefined,
       onRevert: onRevertPath,
+      codeNavigation: codeNavigation
+        ? { navigation: codeNavigation, newSideOnDisk: diffMode === "uncommitted" }
+        : undefined,
     }),
     [
+      codeNavigation,
+      diffMode,
       reviewActions,
       documentFocusRequest?.path,
       documentFocusRequest?.revision,
