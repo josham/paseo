@@ -66,6 +66,7 @@ import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
 import { ContainerConfigChangedBanner } from "@/components/container-config-changed-banner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContainerStatusTooltipBody } from "@/components/container-status-tooltip";
+import { useContainerLifecycleProgress } from "@/hooks/use-container-lifecycle-progress";
 import { useToast } from "@/contexts/toast-context";
 import { getOrCreateClientId } from "@/utils/client-id";
 import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
@@ -483,6 +484,7 @@ interface WorkspaceHeaderTitleBarProps {
   onRebuildContainer: () => void;
   currentBranchName: string | null;
   normalizedServerId: string;
+  normalizedWorkspaceId: string;
   showWorkspaceSetup: boolean;
   importAgentDisabled: boolean;
   copyPathDisabled: boolean;
@@ -504,6 +506,7 @@ function WorkspaceHeaderTitleBar({
   onRestartContainer,
   onRebuildContainer,
   normalizedServerId,
+  normalizedWorkspaceId,
   showWorkspaceSetup,
   importAgentDisabled,
   copyPathDisabled,
@@ -513,6 +516,13 @@ function WorkspaceHeaderTitleBar({
   onOpenSetupTab,
 }: WorkspaceHeaderTitleBarProps) {
   const { t } = useTranslation();
+  // Owned here rather than threaded down: this component already has both ids,
+  // and the badge's tooltip is the only thing that shows the line.
+  const containerProgressLine = useContainerLifecycleProgress({
+    client: useHostRuntimeClient(normalizedServerId),
+    workspaceId: normalizedWorkspaceId,
+    enabled: containerStatus !== undefined,
+  });
   return (
     <View style={styles.headerTitleContainer}>
       {isLoading ? (
@@ -539,6 +549,7 @@ function WorkspaceHeaderTitleBar({
                 <ContainerStatusTooltipBody
                   containerStatus={containerStatus}
                   containerInfo={containerInfo}
+                  progressLine={containerProgressLine}
                 />
               </TooltipContent>
             </Tooltip>
@@ -3392,6 +3403,7 @@ function WorkspaceScreenContent({
                 subtitle={workspaceHeaderSubtitle}
                 isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
                 containerStatus={workspaceDescriptor?.containerStatus ?? undefined}
+                normalizedWorkspaceId={normalizedWorkspaceId}
                 onRestartContainer={handleRestartContainer}
                 onRebuildContainer={handleRebuildContainer}
                 hasDevContainerConfig={workspaceDescriptor?.hasDevContainerConfig ?? undefined}
@@ -3423,6 +3435,7 @@ function WorkspaceScreenContent({
       isWorkspaceHeaderLoading,
       normalizedServerId,
       openImportSheet,
+      normalizedWorkspaceId,
       showScreenHeader,
       showWorkspaceSetup,
       workspaceDescriptor?.containerStatus,
