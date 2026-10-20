@@ -42,6 +42,11 @@ import {
   useHosts,
   type HostRuntimeConnectionStatus,
 } from "@/runtime/host-runtime";
+import {
+  selectableContainerBackends,
+  useContainerBackendAvailability,
+} from "@/hooks/use-container-backend-availability";
+import { useContainerProviderProbe } from "@/hooks/use-container-provider-probe";
 import { useHostFeature, useHostFeatureMap } from "@/runtime/host-features";
 import type { HostProfile } from "@/types/host-connection";
 import {
@@ -299,6 +304,7 @@ async function createMultiplicityWorkspace(input: {
   ) => void;
   serverId: string;
   createFailedMessage: string;
+  containerBackend: string | null;
 }): Promise<WorkspaceCreationResult> {
   const projectId = getHostProjectId(input.project, input.serverId);
   if (!projectId) throw new Error("Project is not available on the selected host");
@@ -325,6 +331,7 @@ async function createMultiplicityWorkspace(input: {
           projectId,
         },
     ...(firstAgentContext ? { firstAgentContext } : {}),
+    containerBackend: input.containerBackend,
   });
   if (payload.error || !payload.workspace) {
     throw new Error(payload.error ?? input.createFailedMessage);
@@ -846,6 +853,7 @@ function useNewWorkspaceInitialContext({
   };
 }
 
+// oxlint-disable-next-line eslint(complexity): screen has many UI states
 export function NewWorkspaceScreen({
   serverId,
   sourceDirectory: sourceDirectoryProp,
@@ -898,11 +906,14 @@ export function NewWorkspaceScreen({
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const openAddProjectPicker = useOpenAddProject();
   const [isolationPickerOpen, setIsolationPickerOpen] = useState(false);
+  const [containerBackendPickerOpen, setContainerBackendPickerOpen] = useState(false);
   const [pickerSearchQuery, setPickerSearchQuery] = useState("");
   const [debouncedPickerSearchQuery, setDebouncedPickerSearchQuery] = useState("");
   const pickerAnchorRef = useRef<View>(null);
   const projectPickerAnchorRef = useRef<View>(null);
   const isolationPickerAnchorRef = useRef<View>(null);
+  const containerBackendPickerAnchorRef = useRef<View>(null);
+  const openContainerBackendPicker = useCallback(() => setContainerBackendPickerOpen(true), []);
   const hostPickerAnchorRef = useRef<View | null>(null);
   const isDraftHandoffActive = useIsNewWorkspaceDraftHandoffActive({ draftId, selectedServerId });
   const isStillOnCreateScreen = useNewWorkspaceScreenPresence();
@@ -957,6 +968,7 @@ export function NewWorkspaceScreen({
   }, [pickerSearchQuery]);
 
   const { workspace } = creationResult;
+  const isPending = isNewWorkspacePending({ pendingAction, isDraftHandoffActive });
   const client = useHostRuntimeClient(selectedServerId);
   const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const {
@@ -975,6 +987,27 @@ export function NewWorkspaceScreen({
     lastActiveProject,
     allowAllProjects: supportsWorkspaceMultiplicity,
   });
+  const { containerBackend, setContainerBackend, containerAvailability } =
+    useContainerBackendAvailability(client, selectedSourceDirectory ?? "");
+  // Model selection must show what the workspace will actually run: the host's
+  // providers, or the container's once a backend is picked.
+  const containerProbe = useContainerProviderProbe({
+    client,
+    serverId: selectedServerId,
+    cwd: selectedSourceDirectory ?? null,
+    containerBackend,
+  });
+  const reportedProbeErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (containerProbe.status !== "error" || !containerProbe.error) {
+      reportedProbeErrorRef.current = null;
+      return;
+    }
+    // The model list silently stays on the host's providers otherwise.
+    if (reportedProbeErrorRef.current === containerProbe.error) return;
+    reportedProbeErrorRef.current = containerProbe.error;
+    toast.error(t("workspaceSetup.containerBackend.probeFailed", { error: containerProbe.error }));
+  }, [containerProbe.status, containerProbe.error, toast, t]);
   const projectIconTargets = useMemo(
     () => buildNewWorkspaceProjectIconTargets(projects, selectedServerId),
     [projects, selectedServerId],
@@ -1037,7 +1070,6 @@ export function NewWorkspaceScreen({
   const worktreeSupport = selectedProject
     ? getWorktreeSupportForHostProject({ project: selectedProject, serverId: selectedServerId })
     : "unsupported";
-  const isPending = isNewWorkspacePending({ pendingAction, isDraftHandoffActive });
   const { effectiveIsolation, setIsolation, canCreateWorktree, showRefPicker } =
     useWorkspaceIsolation({
       supportsMultiplicity: supportsWorkspaceMultiplicity,
@@ -1266,6 +1298,7 @@ export function NewWorkspaceScreen({
         mergeWorkspaces,
         serverId: selectedServerId,
         createFailedMessage: t("newWorkspace.errors.createWorktreeFailed"),
+        containerBackend,
       });
       setCreationResult(normalizedWorkspace);
       return normalizedWorkspace;
@@ -1273,6 +1306,7 @@ export function NewWorkspaceScreen({
     [
       creationIdentity,
       creationResult,
+      containerBackend,
       effectiveIsolation,
       mergeWorkspaces,
       queryClient,
@@ -1447,9 +1481,24 @@ export function NewWorkspaceScreen({
         ? {
             ...composerState.agentControls,
             disabled: isPending,
+            // Retry has to ask whichever environment is selected. The form's
+            // own refresh is cwd-scoped, so with a container picked it answers
+            // about the host — or about whatever workspace already owns this
+            // directory — and replaces the container's models with those.
+            // The container answers for every provider at once, so the
+            // provider argument has nothing to narrow.
+            onRetryModelProvider: containerProbe.retry,
+            isRetryingModelProvider:
+              containerProbe.isRetrying || containerProbe.status === "probing",
           }
         : undefined,
-    [composerState, isPending],
+    [
+      composerState,
+      isPending,
+      containerProbe.retry,
+      containerProbe.isRetrying,
+      containerProbe.status,
+    ],
   );
 
   const pickerEmptyText =
@@ -1494,6 +1543,16 @@ export function NewWorkspaceScreen({
       effectiveIsolation,
       canCreateWorktree,
       onSelect: setIsolation,
+    },
+    containerBackend: {
+      anchorRef: containerBackendPickerAnchorRef,
+      open: openContainerBackendPicker,
+      openState: containerBackendPickerOpen,
+      onOpenChange: setContainerBackendPickerOpen,
+      value: containerBackend,
+      backends: selectableContainerBackends(containerAvailability),
+      probeStatus: containerProbe.status,
+      onSelect: setContainerBackend,
     },
     base: {
       anchorRef: pickerAnchorRef,

@@ -7,7 +7,14 @@ import { Shortcut } from "@/components/ui/shortcut";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { getHostProjectSourceDirectory, type HostProjectListItem } from "@/projects/host-projects";
 import { pickerItemLabel, type PickerItem } from "../../new-workspace-picker-item";
-import { addProjectIcon, branchIcon, folderIcon, ProjectIcon, pullRequestIcon } from "./icons";
+import {
+  addProjectIcon,
+  branchIcon,
+  containerIcon,
+  folderIcon,
+  ProjectIcon,
+  pullRequestIcon,
+} from "./icons";
 
 interface OptionRowState {
   option: ComboboxOption;
@@ -102,6 +109,29 @@ export function IsolationOption({
       disabled={disabled}
       onPress={onPress}
       leadingSlot={option.id === "worktree" ? worktreeLeading : localLeading}
+    />
+  );
+}
+
+const containerLeading = <IconBox>{containerIcon}</IconBox>;
+
+/** Where a workspace's agents and terminals run: the host, or one of its container backends. */
+export function ContainerBackendOption({
+  option,
+  selected,
+  active,
+  onPress,
+  disabled,
+}: OptionRowState & { disabled: boolean }): ReactElement {
+  return (
+    <ComboboxItem
+      testID={`workspace-create-container-backend-${option.id}`}
+      label={option.label}
+      selected={selected}
+      active={active}
+      disabled={disabled}
+      onPress={onPress}
+      leadingSlot={option.id === "host" ? localLeading : containerLeading}
     />
   );
 }

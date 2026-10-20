@@ -14,6 +14,8 @@ function workspace(workspaceId: string, projectViewKey: string): SidebarWorkspac
     workspaceDirectoryLabel: workspaceId,
     projectKind: "git",
     workspaceKind: "worktree",
+    containerStatus: undefined,
+    containerInfo: undefined,
     name: workspaceId,
     title: null,
     pinnedAt: null,

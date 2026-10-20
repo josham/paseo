@@ -114,9 +114,10 @@ import {
   sendBoundedPhysicalFrame,
   sendBoundedPhysicalFrameAndWait,
 } from "./websocket/physical-socket.js";
+import type { LaunchStrategyRegistry } from "./devcontainer/launch-strategy-registry.js";
+import type { ContainerBackendRegistry } from "./devcontainer/container-backend-registry.js";
 
 const WS_CLOSE_DAEMON_AUTH_FAILED = 4401;
-
 export interface ExternalSocketMetadata {
   transport: "relay" | "hub";
   externalSessionKey?: string;
@@ -597,6 +598,9 @@ export class VoiceAssistantWebSocketServer {
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly devContainerAvailable: boolean;
+  private readonly launchStrategyRegistry: LaunchStrategyRegistry | null;
+  private readonly containerBackends: ContainerBackendRegistry | null;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -617,6 +621,7 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  // oxlint-disable-next-line eslint(complexity): optional subsystems are all wired here
   constructor(
     server: HTTPServer,
     logger: pino.Logger,
@@ -663,6 +668,9 @@ export class VoiceAssistantWebSocketServer {
     pluginRuntime?: SessionOptions["pluginRuntime"],
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
+    devContainerAvailable?: boolean,
+    launchStrategyRegistry?: LaunchStrategyRegistry,
+    containerBackends?: ContainerBackendRegistry,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -680,6 +688,9 @@ export class VoiceAssistantWebSocketServer {
     this.hubRelationships = hubRelationships ?? null;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.devContainerAvailable = devContainerAvailable ?? false;
+    this.launchStrategyRegistry = launchStrategyRegistry ?? null;
+    this.containerBackends = containerBackends ?? null;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
@@ -1521,6 +1532,8 @@ export class VoiceAssistantWebSocketServer {
       serviceProxy: this.serviceProxy ?? undefined,
       scriptRuntimeStore: this.scriptRuntimeStore ?? undefined,
       workspaceSetupObservation: this.workspaceSetupObservation,
+      launchStrategyRegistry: this.launchStrategyRegistry ?? undefined,
+      containerBackends: this.containerBackends ?? undefined,
       workspaceSetupRuntime: this.workspaceSetupRuntime,
       onBranchChanged: this.onBranchChanged ?? undefined,
       getDaemonTcpPort: this.getDaemonTcpPort ?? undefined,
@@ -1962,6 +1975,8 @@ export class VoiceAssistantWebSocketServer {
         agentProfiles: true,
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: true,
+        // COMPAT(devContainers): added in v0.2.0, remove gate after 2027-07-22 once daemon floor >= v0.2.0.
+        devContainers: this.devContainerAvailable,
       },
     };
   }
