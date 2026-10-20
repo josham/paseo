@@ -1,0 +1,15 @@
+# Fires when the desktop app replaces its own AppImage.
+#
+# electron-updater downloads and installs on its own -- autoDownload is true and
+# there is no setting to turn updates off -- so the app moves out from under the
+# daemon whether or not you drive updates yourself. This is what notices.
+
+[Unit]
+Description=Watch the Paseo Edge AppImage for updates
+Documentation=https://github.com/josham/paseo/blob/edge/tooling/scripts/edge/install-daemon.sh
+
+[Path]
+PathChanged=%h/Applications/Paseo-Edge-x86_64.AppImage
+
+[Install]
+WantedBy=default.target
