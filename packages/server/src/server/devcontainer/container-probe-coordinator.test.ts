@@ -97,6 +97,36 @@ test("a probe returns the entries it found and removes its container", async () 
   expect(calls.stopped[0].options).toEqual({ remove: true });
 });
 
+test("a probe tears down under the same identity it started under", async () => {
+  // Seen in the field 2026-09-15: `up` was given the probe's own compose project
+  // but `stop` was handed the bare ref. A teardown that does not know its project
+  // falls back to matching every compose container on the folder whose
+  // paseo.container label is empty -- which is what a container built by VS Code
+  // looks like -- and force-removed it, so VS Code lost its container
+  // ("Cannot reconnect. Please reload the window.") and the probe's own sibling
+  // services were stranded under a name nothing would ask for again.
+  const { backend, calls } = createFakeBackend();
+  const coordinator = createCoordinator({ backend });
+
+  await coordinator.probe({
+    requestId: "req-1",
+    cwd: "/repo/app",
+    containerBackend: "devcontainer",
+    onProgress: () => {},
+  });
+
+  expect(calls.up).toHaveLength(1);
+  expect(calls.stopped).toHaveLength(1);
+  const started = calls.up[0];
+  const stopped = calls.stopped[0].ref;
+
+  // The project is what scopes both the lookup and the removal, so it has to be
+  // on the ref both times, and be the same one.
+  expect(started.composeProject).toBeDefined();
+  expect(stopped.composeProject).toBe(started.composeProject);
+  expect(stopped.key).toBe(started.key);
+});
+
 test("a probe container is created under its own identity, never a workspace's", async () => {
   const { backend, calls } = createFakeBackend();
   const coordinator = createCoordinator({ backend });
