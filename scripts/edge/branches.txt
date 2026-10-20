@@ -24,7 +24,6 @@ fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped 
 fix/content-width-boundary-key  # A content width change reaches a chat that is already open, without a reload (fork-only)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
-fix/navigator-polyfill-before-routes  # navigator polyfill runs before route modules, so Android release builds start (no upstream PR yet)
 edge/prompt-history  # Composer prompt recall — ArrowUp and Ctrl+R fuzzy search over a per-project daemon store (fork-only, never upstreamed)
 fix/explorer-symlink-entries  # Symlinked directories open, and links the workspace boundary will not follow are shown with a reason rather than dropped (no upstream PR yet)
 fix/workspace-directory-hydration-per-connection  # A reconnect that lands on a new daemon session shows the loading state instead of "Workspace unavailable" (no upstream PR yet)
