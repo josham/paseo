@@ -2,7 +2,11 @@ import type {
   DaemonTransport,
   DaemonTransportFactory,
 } from "@getpaseo/client/internal/daemon-client";
-import { validatePort, validateSshHost } from "@getpaseo/protocol/ssh-transport";
+import {
+  validatePort,
+  validateSshHost,
+  type SshRemoteDaemonOptions,
+} from "@getpaseo/protocol/ssh-transport";
 import type { DesktopDaemonTransportTarget } from "./desktop-daemon";
 import {
   defaultLocalDaemonTransportRpc,
@@ -11,6 +15,8 @@ import {
 } from "./local-daemon-transport-rpc";
 
 const DESKTOP_TRANSPORT_SCHEME = "paseo+desktop:";
+
+const REMOTE_DAEMON_KEYS = ["remoteHome", "installDir", "version"] as const;
 
 function encodeBinaryToBase64(data: Uint8Array | ArrayBuffer): string {
   const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
@@ -39,6 +45,15 @@ export function buildDesktopDaemonTransportUrl(target: DesktopDaemonTransportTar
     }
     if (target.daemonPort !== undefined) {
       url.searchParams.set("daemonPort", String(target.daemonPort));
+    }
+    if (target.remoteDaemon) {
+      // `install` is the flag, not the paths: a host with every path left at
+      // its default still has to say it opted in.
+      url.searchParams.set("install", "1");
+      for (const key of REMOTE_DAEMON_KEYS) {
+        const value = target.remoteDaemon[key];
+        if (value) url.searchParams.set(key, value);
+      }
     }
   } else {
     url.searchParams.set("path", target.transportPath);
@@ -73,10 +88,23 @@ function parseSshDesktopTransportUrl(parsed: URL, rawUrl: string): DesktopDaemon
       host,
       ...(sshPort !== undefined ? { sshPort } : {}),
       ...(daemonPort !== undefined ? { daemonPort } : {}),
+      ...parseRemoteDaemonParams(parsed),
     };
   } catch (error) {
     throw new Error(`Invalid SSH transport target: ${rawUrl}`, { cause: error });
   }
+}
+
+function parseRemoteDaemonParams(
+  parsed: URL,
+): { remoteDaemon: SshRemoteDaemonOptions } | Record<string, never> {
+  if (parsed.searchParams.get("install") !== "1") return {};
+  const remoteDaemon: SshRemoteDaemonOptions = {};
+  for (const key of REMOTE_DAEMON_KEYS) {
+    const value = parsed.searchParams.get(key)?.trim();
+    if (value) remoteDaemon[key] = value;
+  }
+  return { remoteDaemon };
 }
 
 function parseOptionalUrlPort(parsed: URL, key: string, label: string): number | undefined {
