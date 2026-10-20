@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { ProviderSnapshotEntry } from "../agent/agent-sdk-types.js";
 import type { ContainerBackend, ContainerRef } from "./container-backend.js";
+import { composeProjectNameFor } from "./compose-project.js";
 import type { ProcessLaunchStrategy } from "./launch-strategy.js";
 
 /**
@@ -164,12 +165,27 @@ export class ContainerProbeCoordinator {
       kind: "probe",
       workspaceFolder: request.cwd,
     };
+    // The project belongs to the probe's identity, so it has to be on the ref
+    // itself rather than injected at the `up` call: `stop` reads it too, and a
+    // teardown that does not know the project falls back to matching every
+    // compose container on this folder — which is how a probe came to `docker
+    // rm -f` the container VS Code was attached to, and how its own sibling
+    // services were left running under a name nothing would ever ask for again.
+    //
+    // Compose resolves by project, so without one of its own a probe's `up` also
+    // lands on the container the workspace is using.
+    const probeRef: ContainerRef = { ...ref, composeProject: composeProjectNameFor(ref.key) };
+
     const emitProgress = (line: string): void => {
       for (const subscriber of subscribers.values()) subscriber(line);
     };
 
     try {
-      const handle = await backend.up({ ...ref, onProgress: emitProgress, signal });
+      const handle = await backend.up({
+        ...probeRef,
+        onProgress: emitProgress,
+        signal,
+      });
       signal.throwIfAborted();
       const entries = await this.deps.probeProviders({
         cwd: request.cwd,
@@ -187,7 +203,7 @@ export class ContainerProbeCoordinator {
     } finally {
       // The container is scratch either way: on success its answers are already
       // in hand, and on failure or cancellation it is a half-built leftover.
-      await backend.stop(ref, { remove: true }).catch((error: unknown) => {
+      await backend.stop(probeRef, { remove: true }).catch((error: unknown) => {
         this.logger.warn({ err: error, key: ref.key }, "Failed to remove probe container");
       });
     }
