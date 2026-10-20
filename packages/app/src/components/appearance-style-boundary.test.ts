@@ -15,6 +15,14 @@ describe("appearanceStyleBoundaryKey", () => {
       appearanceStyleBoundaryKey(darkTheme),
     );
   });
+
+  it("changes when content width changes without any other appearance token changing", () => {
+    const widthOnlyChange = { ...darkTheme, contentMaxWidth: darkTheme.contentMaxWidth + 1 };
+
+    expect(appearanceStyleBoundaryKey(widthOnlyChange)).not.toBe(
+      appearanceStyleBoundaryKey(darkTheme),
+    );
+  });
 });
 
 // This is a placement contract against the production JSX, not a simulated native mount.

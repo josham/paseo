@@ -9,6 +9,7 @@ import {
 } from "../support/helpers/content-width";
 import { openFileExplorer, openFileFromExplorer } from "../support/helpers/file-explorer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { clickSettingsBackToWorkspace } from "../support/helpers/settings";
 
 const ULTRAWIDE_VIEWPORT = { width: 2560, height: 1080 };
 
@@ -45,7 +46,9 @@ test("widens chat and Markdown files to the chosen content width and resets to t
     });
 
     await test.step("chat and Markdown files use the custom width", async () => {
-      await openAgentRoute(page, agent);
+      // Back through the app rather than openAgentRoute: a full page load would rebuild
+      // every style from scratch and hide a width change that never reached a mounted chat.
+      await clickSettingsBackToWorkspace(page);
       await expectContentColumnWidth(assistantMessage, { min: 1200, max: 1600 });
       await page.screenshot({ path: testInfo.outputPath("chat-custom-width.png") });
 
