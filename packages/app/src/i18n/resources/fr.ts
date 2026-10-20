@@ -1841,6 +1841,20 @@ export const fr: TranslationResources = {
         invalidTarget: "Saisissez un hôte ssh:// valide",
         failedToConnect: "Impossible de se connecter en SSH. {{detail}}",
       },
+      install: {
+        label: "Installer et démarrer Paseo sur cet hôte",
+        helper: "Paseo s'installe dans ~/.paseo sur l'hôte distant et y démarre le daemon.",
+      },
+    },
+    ssh: {
+      prompt: {
+        password: "Mot de passe SSH",
+        confirm: "Vérifier la clé d'hôte SSH",
+        passphrase: "Phrase secrète de la clé SSH",
+        secret: "Secret",
+        cancel: "Annuler",
+        submit: "Se connecter",
+      },
     },
     link: {
       title: "Coller le lien d’association",
@@ -2594,6 +2608,12 @@ export const fr: TranslationResources = {
         relay: "Relais",
         local: "Local",
         remoteSsh: "SSH distant",
+      },
+      ssh: {
+        authRequired:
+          "{{host}} demande un mot de passe ou la confirmation d'une clé d'hôte. Paseo ne le demande qu'au moment où vous vous connectez, il ne vous interrompra donc pas en arrière-plan.",
+        connect: "Se connecter",
+        connecting: "Connexion…",
       },
       connections: {
         title: "Connexions",
