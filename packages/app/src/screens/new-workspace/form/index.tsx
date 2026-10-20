@@ -9,6 +9,8 @@ import { HostPicker } from "@/components/hosts/host-picker";
 import type { LaunchTarget } from "@/new-workspace-launch/target";
 import type { HostProjectListItem } from "@/projects/host-projects";
 import type { HostProfile } from "@/types/host-connection";
+import type { ContainerProbeStatus } from "@/hooks/use-container-provider-probe";
+import type { AvailableBackendInfo } from "@/hooks/use-container-backend-availability";
 import type { PickerItem } from "../../new-workspace-picker-item";
 import {
   FIELD_BADGE_HEIGHT,
@@ -16,9 +18,15 @@ import {
   FieldTrigger,
   type FieldTriggerVariant,
 } from "./field-trigger";
-import { branchIcon, folderIcon, ProjectIcon, pullRequestIcon } from "./icons";
+import { branchIcon, containerIcon, folderIcon, ProjectIcon, pullRequestIcon } from "./icons";
 import { LaunchControl } from "./launch-control";
-import { AddProjectOption, IsolationOption, ProjectOption, RefOption } from "./options";
+import {
+  AddProjectOption,
+  ContainerBackendOption,
+  IsolationOption,
+  ProjectOption,
+  RefOption,
+} from "./options";
 
 type Isolation = "local" | "worktree";
 type RenderOption = NonNullable<ComboboxProps["renderOption"]>;
@@ -56,6 +64,13 @@ export interface NewWorkspaceFormProps {
     effectiveIsolation: Isolation;
     canCreateWorktree: boolean;
     onSelect: (isolation: Isolation) => void;
+  };
+  /** Absent until a host offers a container backend with a config to run in. */
+  containerBackend: PickerControl & {
+    value: string | null;
+    backends: AvailableBackendInfo[];
+    probeStatus: ContainerProbeStatus;
+    onSelect: (backend: string | null) => void;
   };
   base: PickerControl & {
     selectedSourceDirectory: string | null;
@@ -123,6 +138,57 @@ function useProjectPicker(
   return { renderOption, footer };
 }
 
+function useContainerBackendPicker(
+  containerBackend: NewWorkspaceFormProps["containerBackend"],
+  isPending: boolean,
+): {
+  options: ComboboxOption[];
+  value: string;
+  canShow: boolean;
+  triggerLabel: string;
+  onSelect: (id: string) => void;
+  renderOption: RenderOption;
+} {
+  const { t } = useTranslation();
+  const { backends, value, probeStatus, onSelect, onOpenChange } = containerBackend;
+  const options = useMemo<ComboboxOption[]>(
+    () => [
+      { id: "host", label: t("workspaceSetup.containerBackend.host") },
+      ...backends.map((backend) => ({ id: backend.id, label: backend.label })),
+    ],
+    [backends, t],
+  );
+  const handleSelect = useCallback(
+    (id: string) => {
+      onSelect(id === "host" ? null : id);
+      onOpenChange(false);
+    },
+    [onOpenChange, onSelect],
+  );
+  const renderOption = useCallback<RenderOption>(
+    (row) => <ContainerBackendOption {...row} disabled={isPending} />,
+    [isPending],
+  );
+  const selectedLabel =
+    value === null
+      ? t("workspaceSetup.containerBackend.host")
+      : (options.find((option) => option.id === value)?.label ??
+        t("workspaceSetup.containerBackend.devcontainer"));
+  return {
+    options,
+    value: value ?? "host",
+    // Host on its own is not a choice, so there is nothing to pick.
+    canShow: options.length > 1,
+    // Building a container takes minutes on a first run; the trigger has to say so.
+    triggerLabel:
+      probeStatus === "probing"
+        ? t("workspaceSetup.containerBackend.probing", { backend: selectedLabel })
+        : selectedLabel,
+    onSelect: handleSelect,
+    renderOption,
+  };
+}
+
 function useIsolationPicker(
   isolation: NewWorkspaceFormProps["isolation"],
   isPending: boolean,
@@ -162,12 +228,14 @@ function useRefRenderOption(itemById: Map<string, PickerItem>, isPending: boolea
  * of full-width fields with the label inside. Desktop: one meta row of badges. Either way, a field
  * that does not apply to the selected project is left out, and Host only shows with a second host.
  */
+// oxlint-disable-next-line eslint(complexity): one branch per optional picker row
 export function useNewWorkspaceForm(props: NewWorkspaceFormProps): ReactElement {
   const { t } = useTranslation();
-  const { isCompact, isPending, project, host, isolation, base, launch } = props;
+  const { isCompact, isPending, project, host, isolation, containerBackend, base, launch } = props;
   const variant: FieldTriggerVariant = isCompact ? "field" : "badge";
   const projectPicker = useProjectPicker(project, isPending);
   const isolationPicker = useIsolationPicker(isolation, isPending);
+  const containerBackendPicker = useContainerBackendPicker(containerBackend, isPending);
   const renderRefOption = useRefRenderOption(base.itemById, isPending);
 
   const showHost = host.allHosts.length > 1;
@@ -257,6 +325,19 @@ export function useNewWorkspaceForm(props: NewWorkspaceFormProps): ReactElement 
       testID="workspace-create-isolation-trigger"
     />
   ) : null;
+  const containerBackendField = containerBackendPicker.canShow ? (
+    <FieldTrigger
+      ref={containerBackend.anchorRef}
+      variant={variant}
+      label={t("workspaceSetup.containerBackend.label")}
+      accessibilityLabel="Container backend"
+      icon={containerBackend.value === null ? folderIcon : containerIcon}
+      value={containerBackendPicker.triggerLabel}
+      onPress={containerBackend.open}
+      disabled={isPending}
+      testID="workspace-create-container-backend-trigger"
+    />
+  ) : null;
   const baseField = base.showRefPicker ? (
     <FieldTrigger
       ref={base.anchorRef}
@@ -312,6 +393,17 @@ export function useNewWorkspaceForm(props: NewWorkspaceFormProps): ReactElement 
         renderOption={isolationPicker.renderOption}
       />
       <Combobox
+        options={containerBackendPicker.options}
+        value={containerBackendPicker.value}
+        onSelect={containerBackendPicker.onSelect}
+        title={t("workspaceSetup.containerBackend.label")}
+        open={containerBackend.openState}
+        onOpenChange={containerBackend.onOpenChange}
+        desktopPlacement="bottom-start"
+        anchorRef={containerBackend.anchorRef}
+        renderOption={containerBackendPicker.renderOption}
+      />
+      <Combobox
         options={base.options}
         value={base.selectedOptionId}
         onSelect={base.onSelect}
@@ -335,6 +427,7 @@ export function useNewWorkspaceForm(props: NewWorkspaceFormProps): ReactElement 
         {projectField}
         {hostField}
         {isolationField}
+        {containerBackendField}
         {baseField}
         {launchField}
         {/* Isolation and Base come and go with the project; their rows stay reserved so the
@@ -351,6 +444,9 @@ export function useNewWorkspaceForm(props: NewWorkspaceFormProps): ReactElement 
       <View style={styles.desktopControl}>{projectField}</View>
       {hostField ? <View style={styles.desktopControl}>{hostField}</View> : null}
       {isolationField ? <View style={styles.desktopControl}>{isolationField}</View> : null}
+      {containerBackendField ? (
+        <View style={styles.desktopControl}>{containerBackendField}</View>
+      ) : null}
       {baseField ? <View style={styles.desktopControl}>{baseField}</View> : null}
       <View style={styles.launchSpacer} pointerEvents="none" />
       {launchField}

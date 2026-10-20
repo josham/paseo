@@ -736,6 +736,34 @@ export const en = {
         copyBranchName: "Copy branch name",
         showSetup: "Show setup",
       },
+      container: {
+        running: "Running in container",
+        runningTooltip: "Agents and terminals run inside this workspace's container",
+        starting: "Starting container",
+        startingTooltip:
+          "Building and starting the container environment. Agents and terminals will wait until ready.",
+        stopped: "Container stopped",
+        stoppedTooltip: "The container environment is no longer running",
+        details: {
+          backend: "Backend",
+          image: "Image",
+          container: "Container",
+          user: "User",
+          started: "Started",
+        },
+        configChangedTitle: "Container config changed",
+        configChangedMessage:
+          "The devcontainer.json has changed since the container was built. Rebuild to apply the changes.",
+        dismiss: "Dismiss",
+        rebuildAction: "Rebuild container",
+        restartAction: "Restart container",
+        rebuildConfirmTitle: "Rebuild container",
+        rebuildConfirmMessage:
+          "All running agents and terminals will be stopped. Rebuild the container from scratch?",
+        restartConfirmTitle: "Restart container",
+        restartConfirmMessage:
+          "All running agents and terminals will be restarted. Restart the container?",
+      },
       toasts: {
         workspacePathUnavailable: "Workspace path is not available yet",
         branchNameUnavailable: "Branch name not available",
@@ -1342,10 +1370,10 @@ export const en = {
       label: "Isolation",
     },
     fields: {
+      host: "Host",
       project: "Project",
       branch: "Branch",
       baseNotApplicable: "Not applicable",
-      host: "Host",
     },
     titlePlaceholder: "Title (optional)",
     errors: {
@@ -1648,6 +1676,13 @@ export const en = {
       hostDisconnected: "Host is not connected",
       pendingRequired: "No workspace setup is pending",
       composerStateRequired: "Workspace setup composer state is required",
+    },
+    containerBackend: {
+      label: "Execution environment",
+      host: "Host",
+      devcontainer: "Dev Container",
+      probing: "{{backend}} — starting…",
+      probeFailed: "Could not inspect the container: {{error}}",
     },
   },
   onboarding: {

@@ -39,6 +39,8 @@ function makeWorkspace(
     scripts: [],
     hasRunningScripts: false,
     labels,
+    containerStatus: undefined,
+    containerInfo: undefined,
   };
   return { placement, entry };
 }

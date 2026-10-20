@@ -44,6 +44,8 @@ function workspace(input: {
     archiveUnpushedCommitCount: null,
     scripts: [],
     hasRunningScripts: false,
+    containerStatus: undefined,
+    containerInfo: undefined,
   };
 }
 

@@ -71,6 +71,7 @@ export function createWorkspaceScriptsService(deps: {
   publishStatusUpdate: (message: ScriptStatusUpdateMessage) => void;
   spawnWorkspaceScript: (options: SpawnWorkspaceScriptOptions) => Promise<WorktreeScriptResult>;
   assertAutomationAllowed: (workspaceId: string) => Promise<void>;
+  resolveLaunchStrategy?: SpawnWorkspaceScriptOptions["resolveLaunchStrategy"];
 }): WorkspaceScriptsService {
   const {
     serviceProxy,
@@ -89,6 +90,7 @@ export function createWorkspaceScriptsService(deps: {
     publishStatusUpdate,
     spawnWorkspaceScript,
     assertAutomationAllowed,
+    resolveLaunchStrategy,
   } = deps;
 
   function resolveGitMetadata(
@@ -192,6 +194,7 @@ export function createWorkspaceScriptsService(deps: {
       terminalManager: available.terminalManager,
       globalServicePorts,
       logger,
+      resolveLaunchStrategy,
       onLifecycleChanged: () => {
         void emitStatusUpdate(workspace.workspaceId, workspace.cwd);
       },

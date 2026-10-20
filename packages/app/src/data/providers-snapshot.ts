@@ -33,12 +33,16 @@ export function providersSnapshotRequestOptions(input: {
   cwd?: string | null;
   providers?: AgentProvider[];
   ifNoneMatch?: string;
+  containerBackend?: string | null;
 }) {
   const normalizedCwd = normalizeProvidersSnapshotCwd(input.cwd);
   return {
     ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
     ...(input.providers ? { providers: input.providers } : {}),
     ...(input.ifNoneMatch ? { ifNoneMatch: input.ifNoneMatch } : {}),
+    // null is meaningful — "answer for the host" — so only an absent value is
+    // dropped.
+    ...(input.containerBackend === undefined ? {} : { containerBackend: input.containerBackend }),
   };
 }
 
@@ -126,6 +130,7 @@ export async function refreshAndApplyProvidersSnapshot(input: {
   cwd: string | null;
   providers?: AgentProvider[];
   cache?: ProviderSnapshotCache;
+  containerBackend?: string | null;
 }) {
   const result = await input.client.refreshProvidersSnapshot(
     providersSnapshotRequestOptions(input),
