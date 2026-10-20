@@ -21,6 +21,7 @@
 # edge/tooling is always merged first and does not belong in this list.
 
 fix/numeric-settings-clamp-resync  # Out-of-range size entries show the clamped value (#3655, open)
+fix/skia-26-android-prototype  # The Android APK builds again: #7424 bumped Skia to 2.6.2 without following its C++ API changes in the diff prototype (no upstream PR yet)
 fix/content-width-boundary-key  # A content width change reaches a chat that is already open, without a reload (fork-only)
 edge/about-edge-build-row  # Settings -> About names the Edge build (fork-only, never upstreamed)
 edge/agent-tool-hardening  # Daemon credentials scrubbed from spawned processes; agents cannot forge parentage or grant unattended modes (no upstream PR yet)
