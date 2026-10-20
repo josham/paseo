@@ -146,11 +146,54 @@ Push that, and rebuild:
 
 ```bash
 scripts/edge/rebuild.sh            # --dry-run to build it locally without pushing
+scripts/edge/check-android.sh      # compile the native and Kotlin code before tagging
 scripts/edge/release.sh            # bumps the patch, tags edge-vX.Y.Z, pushes
 ```
 
 The tag starts the build. It takes roughly 20 minutes, after which the AppImage is on
 the [releases page](https://github.com/josham/paseo/releases).
+
+## Checking Android before you tag
+
+Linux and Windows break where you can see it — `npm run build:desktop` is a local
+command. Android does not. Its compilers only exist inside the project `expo prebuild`
+generates, so a build that cannot compile is discovered by the Android job *after* the
+tag has already published a release.
+
+```bash
+scripts/edge/check-android.sh      # ~7 min warm, ~17 cold; --keep to inspect the project
+```
+
+It prebuilds and runs exactly two Gradle tasks — `:app:externalNativeBuildRelease` for
+every native module's C++, and `:app:compileReleaseKotlin` for every Kotlin source
+including the patched ones in `node_modules`. No APK, no signing, no lint, no bundle: it
+stops at the last point that fails for a reason a human wrote. It needs the opt-in
+toolchain (`android-dev setup`, which installs the NDK and CMake) and refuses to run if
+the NDK React Native pins is not the one installed.
+
+⚠️ **Why this is a fork concern and not upstream's.** Edge is the only build of Paseo
+made from source on Android — upstream builds on EAS — so an upstream commit that breaks
+the native build reaches us first, and silently. Upstream #7424 shipped two at once on
+2026-10-20: `@shopify/react-native-skia` 2.2.12 → 2.6.2 without following two C++
+signature changes in `paseo-diff-prototype`, and a rewritten gesture-handler patch
+calling two members RNGH 2.32 had dropped. They cost `edge-v1.11.0`, `1.11.1` and
+`1.11.2` to find, one symbol per 20-minute CI round trip, because CI was the only Kotlin
+and NDK toolchain in reach. The fixes are `fix/skia-26-android-prototype` and
+`fix/rngh-232-drawing-order`.
+
+⚠️ **The trap this script checks first.** `patch-package` runs at *install* time, and
+`git checkout` moves `patches/` without touching `node_modules`. A tree whose patches
+changed since its last install therefore compiles the **old** sources — a false failure
+when a patch was just fixed, and a false **pass** when `node_modules` carries a fix the
+tree does not. CI never sees it because every run is a fresh `npm ci`. The remedy the
+script prints is the one that works:
+
+```bash
+rm -rf node_modules/<package> && npm install
+```
+
+Plain `npm install` is not enough: npm sees the version already present and does
+nothing, and patch-package then applies the new patch to an already patched tree.
 
 If two of our branches conflict, `rebuild.sh` stops and leaves the conflict in the tree.
 Resolve it, `git commit`, and re-run. `git config rerere.enabled true` (do this once
