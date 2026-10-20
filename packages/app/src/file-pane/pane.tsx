@@ -16,6 +16,10 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppActivelyVisible } from "@/hooks/use-app-visible";
 import { isFileQueryEnabled } from "@/components/file-pane-enabled";
 import { isWeb } from "@/constants/platform";
+import type { SymbolActions } from "@/code-navigation/symbol-actions";
+import type { CodeNavigation } from "@/code-navigation/use-code-navigation";
+import { useSymbolActions } from "@/code-navigation/use-symbol-actions";
+import { useFilePaneNavigation } from "@/code-navigation/use-file-pane-navigation";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useLiveFile } from "./live-file/hook";
 import { useFilePreview } from "./preview-lifecycle/hook";
@@ -67,6 +71,9 @@ interface FilePreviewBodyProps {
   workspaceRoot: string;
   client: DaemonClient | null;
   serverId: string;
+  symbolActions: SymbolActions | null;
+  selectingText: boolean;
+  onDoneSelectingText: () => void;
 }
 
 type TextExplorerFile = ExplorerFile & { kind: "text" };
@@ -94,11 +101,17 @@ function ReadonlySource({
   filename,
   location,
   navigationRevision,
+  symbolActions,
+  selectingText,
+  onDoneSelectingText,
 }: {
   preview: ExplorerFile;
   filename: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  symbolActions: SymbolActions | null;
+  selectingText: boolean;
+  onDoneSelectingText: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -109,6 +122,9 @@ function ReadonlySource({
       navigationRevision={navigationRevision}
       size={preview.size}
       tooLargeMessage={t("panels.file.tooLargeToDisplay")}
+      symbolActions={symbolActions}
+      selectingText={selectingText}
+      onDoneSelectingText={onDoneSelectingText}
     />
   );
 }
@@ -135,6 +151,9 @@ function FilePreviewBody({
   workspaceRoot,
   client,
   serverId,
+  symbolActions,
+  selectingText,
+  onDoneSelectingText,
 }: FilePreviewBodyProps) {
   const { t } = useTranslation();
   const filePath = location.path;
@@ -177,6 +196,9 @@ function FilePreviewBody({
         filename={filePath}
         location={location}
         navigationRevision={navigationRevision}
+        symbolActions={symbolActions}
+        selectingText={selectingText}
+        onDoneSelectingText={onDoneSelectingText}
       />
     );
   }
@@ -191,14 +213,19 @@ function FilePreviewBody({
 
 export function FilePane({
   serverId,
+  workspaceId,
   workspaceRoot,
   location,
   navigationRevision,
+  openFileLocation,
 }: {
   serverId: string;
+  workspaceId: string;
   workspaceRoot: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  /** Opens a navigation result the way this pane's host opens files. */
+  openFileLocation: (location: WorkspaceFileLocation) => void;
 }) {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
@@ -249,6 +276,22 @@ export function FilePane({
 
   useEffect(() => setPreviewMode("preview"), [targetKey]);
 
+  const {
+    navigationPath,
+    navigation,
+    symbolActions,
+    symbolMenu,
+    resultsSheet,
+    selectingText,
+    stopSelectingText,
+  } = useFilePaneNavigation({
+    serverId,
+    workspaceId,
+    workspaceRoot: normalizedWorkspaceRoot,
+    readTarget,
+    openLocation: openFileLocation,
+  });
+
   const { file: preview, imageAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
   const imagePreviewUri = useAttachmentPreviewUrl(imageAttachment);
   const panel = resolveFilePreviewPanel({
@@ -271,30 +314,39 @@ export function FilePane({
     previewLifecycle.status === "preparing";
 
   return (
-    <FilePanePresentation
-      panel={panel}
-      serverId={serverId}
-      workspaceRoot={normalizedWorkspaceRoot}
-      client={client}
-      readTarget={readTarget}
-      preview={preview}
-      liveFile={liveFile.model}
-      onRetryRead={liveFile.refresh}
-      retryingRead={liveFile.isRetrying}
-      retryLabel={t("common.actions.retry")}
-      filename={getFileNameFromPath(location.path) ?? location.path}
-      previewMode={canTogglePreviewMode ? previewMode : undefined}
-      onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
-      lineCount={lineCount}
-      editable={editable}
-      disconnectedMessage={t("workspace.terminal.hostDisconnected")}
-      errorMessage={errorMessage}
-      isLoading={isLoading}
-      isMobile={isMobile}
-      location={location}
-      navigationRevision={navigationRevision}
-      imagePreviewUri={imagePreviewUri}
-    />
+    <>
+      <FilePanePresentation
+        panel={panel}
+        serverId={serverId}
+        workspaceRoot={normalizedWorkspaceRoot}
+        client={client}
+        readTarget={readTarget}
+        preview={preview}
+        liveFile={liveFile.model}
+        onRetryRead={liveFile.refresh}
+        retryingRead={liveFile.isRetrying}
+        retryLabel={t("common.actions.retry")}
+        filename={getFileNameFromPath(location.path) ?? location.path}
+        previewMode={canTogglePreviewMode ? previewMode : undefined}
+        onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
+        lineCount={lineCount}
+        editable={editable}
+        disconnectedMessage={t("workspace.terminal.hostDisconnected")}
+        errorMessage={errorMessage}
+        isLoading={isLoading}
+        isMobile={isMobile}
+        location={location}
+        navigationRevision={navigationRevision}
+        imagePreviewUri={imagePreviewUri}
+        navigation={navigation}
+        navigationPath={navigationPath}
+        symbolActions={symbolActions}
+        selectingText={selectingText}
+        onDoneSelectingText={stopSelectingText}
+      />
+      {symbolMenu}
+      {resultsSheet}
+    </>
   );
 }
 
@@ -333,6 +385,11 @@ function FilePanePresentation({
   location,
   navigationRevision,
   imagePreviewUri,
+  navigation,
+  navigationPath,
+  symbolActions,
+  selectingText,
+  onDoneSelectingText,
 }: {
   panel: FilePanel | null;
   serverId: string;
@@ -356,6 +413,11 @@ function FilePanePresentation({
   location: WorkspaceFileLocation;
   navigationRevision: number;
   imagePreviewUri: string | null;
+  navigation: CodeNavigation | null;
+  navigationPath: string | null;
+  symbolActions: SymbolActions | null;
+  selectingText: boolean;
+  onDoneSelectingText: () => void;
 }) {
   if (!client && readTarget) {
     return (
@@ -388,6 +450,8 @@ function FilePanePresentation({
         isMobile={isMobile}
         location={location}
         navigationRevision={navigationRevision}
+        navigation={navigation}
+        navigationPath={navigationPath}
       />
     );
   }
@@ -434,6 +498,9 @@ function FilePanePresentation({
         workspaceRoot={workspaceRoot}
         client={client}
         serverId={serverId}
+        symbolActions={symbolActions}
+        selectingText={selectingText}
+        onDoneSelectingText={onDoneSelectingText}
       />
     </View>
   );
@@ -457,6 +524,8 @@ function EditableFilePane({
   isMobile,
   location,
   navigationRevision,
+  navigation,
+  navigationPath,
 }: {
   panel: FilePanel | null;
   serverId: string;
@@ -475,6 +544,8 @@ function EditableFilePane({
   isMobile: boolean;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  navigation: CodeNavigation | null;
+  navigationPath: string | null;
 }) {
   const { settings } = useAppSettings();
   const { t } = useTranslation();
@@ -514,6 +585,17 @@ function EditableFilePane({
   const suspendPendingSave = useCallback(() => model.suspendAutosave(), [model]);
   usePublishPanelInstanceAttributes({ modified: snapshot.modified, suspendPendingSave });
   useEffect(() => () => model.dispose(), [model]);
+
+  const getUnsavedContent = useCallback(() => {
+    const current = model.getSnapshot();
+    return current.modified ? current.content : null;
+  }, [model]);
+  const { symbolActions, symbolMenu } = useSymbolActions({
+    navigation,
+    path: navigationPath,
+    getUnsavedContent,
+    testID: "file-symbol-menu",
+  });
 
   const handleReload = useCallback(() => {
     if (!snapshot.modified) {
@@ -574,6 +656,7 @@ function EditableFilePane({
           vimEnabled={settings.vimKeybindings}
           onCursorChange={setCursor}
           onVimModeChange={handleVimModeChange}
+          symbolActions={symbolActions}
         />
       ) : (
         <FilePreviewBody
@@ -588,8 +671,12 @@ function EditableFilePane({
           workspaceRoot={workspaceRoot}
           client={client}
           serverId={serverId}
+          symbolActions={symbolActions}
+          selectingText={false}
+          onDoneSelectingText={noop}
         />
       )}
+      {symbolMenu}
     </View>
   );
 }
@@ -648,3 +735,5 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
   },
 }));
+
+function noop() {}
