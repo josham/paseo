@@ -3,12 +3,15 @@ import type { AttachmentMetadata } from "@/attachments/types";
 import { persistAttachmentFromBytes } from "@/attachments/service";
 import { createPreviewAttachmentId, getFileNameFromPath } from "@/attachments/utils";
 import { explorerFileFromReadResult } from "@/file-explorer/read-result";
+import { isPdfFile } from "@/pdf/pdf-mime";
+import type { PdfPreviewDocument } from "@/pdf/pdf-preview-props";
 import type { ExplorerFile } from "@/stores/session-store";
 import type { LiveFileSnapshot } from "../live-file/model";
 
 export interface FilePanePreview {
   file: ExplorerFile;
   imageAttachment: AttachmentMetadata | null;
+  pdfDocument: PdfPreviewDocument | null;
 }
 
 export type FilePreviewLifecycleSnapshot =
@@ -24,24 +27,41 @@ const initialSnapshot: FilePreviewLifecycleSnapshot = { status: "initial" };
 /** Converts a completed raw read into the preview resources consumed by FilePane. */
 export async function createFilePanePreview(file: FileReadResult): Promise<FilePanePreview | null> {
   const explorerFile = explorerFileFromReadResult(file);
+  const previewId = createPreviewAttachmentId({
+    mimeType: file.mime,
+    path: file.path,
+    size: file.size,
+    modifiedAt: file.modifiedAt,
+    contentLength: file.bytes.byteLength,
+  });
+
+  // Handed to a system PDF viewer as-is. Where that viewer needs a file on
+  // disk, the shell stages one — the pane only supplies the bytes and a stable
+  // identity for it.
+  if (isPdfFile(explorerFile)) {
+    return {
+      file: explorerFile,
+      imageAttachment: null,
+      pdfDocument: {
+        bytes: file.bytes,
+        cacheId: previewId,
+        fileName: getFileNameFromPath(file.path) ?? "document.pdf",
+      },
+    };
+  }
+
   if (file.kind !== "image") {
-    return { file: explorerFile, imageAttachment: null };
+    return { file: explorerFile, imageAttachment: null, pdfDocument: null };
   }
 
   const imageAttachment = await persistAttachmentFromBytes({
-    id: createPreviewAttachmentId({
-      mimeType: file.mime,
-      path: file.path,
-      size: file.size,
-      modifiedAt: file.modifiedAt,
-      contentLength: file.bytes.byteLength,
-    }),
+    id: previewId,
     bytes: file.bytes,
     mimeType: file.mime,
     fileName: getFileNameFromPath(file.path),
   });
 
-  return { file: explorerFile, imageAttachment };
+  return { file: explorerFile, imageAttachment, pdfDocument: null };
 }
 
 /** Owns conversion after LiveFileModel has produced a raw file snapshot. */
@@ -136,9 +156,10 @@ export function filePreviewFromLifecycle(
 export function resolveFilePreviewLifecycle(snapshot: FilePreviewLifecycleSnapshot): {
   file: ExplorerFile | null;
   imageAttachment: AttachmentMetadata | null;
+  pdfDocument: PdfPreviewDocument | null;
 } {
   const preview = filePreviewFromLifecycle(snapshot);
-  return preview ?? { file: null, imageAttachment: null };
+  return preview ?? { file: null, imageAttachment: null, pdfDocument: null };
 }
 
 function getReadySource(input: {
