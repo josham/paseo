@@ -252,6 +252,7 @@ export const ko: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "에이전트를 찾을 수 없습니다",
+      notFoundHint: "삭제되었거나 이 호스트에서 해당 제공자가 비활성화되어 있을 수 있습니다.",
       failedToLoad: "에이전트를 불러오지 못했습니다",
       reconnecting: "호스트에 다시 연결하는 중",
       updating: "메시지 업데이트 중",

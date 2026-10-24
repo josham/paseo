@@ -252,6 +252,7 @@ export const zhCN: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "未找到 Agent",
+      notFoundHint: "它可能已被删除，或其提供方在此主机上已被禁用。",
       failedToLoad: "加载 Agent 失败",
       reconnecting: "正在重新连接主机",
       updating: "正在更新消息",

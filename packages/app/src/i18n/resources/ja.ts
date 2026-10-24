@@ -254,6 +254,7 @@ export const ja: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "エージェントが見つかりません",
+      notFoundHint: "削除されたか、このホストでプロバイダーが無効になっている可能性があります。",
       failedToLoad: "エージェントの読み込みに失敗しました",
       reconnecting: "ホストに再接続中",
       updating: "メッセージを更新中",

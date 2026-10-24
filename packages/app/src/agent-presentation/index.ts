@@ -39,7 +39,10 @@ export function useAgentDescriptor(
       const agent =
         session?.agents?.get(target.agentId) ?? session?.agentDetails?.get(target.agentId) ?? null;
       return {
-        provider: agent?.provider ?? "codex",
+        // No provider, not a default one: a tab whose agent the host cannot resolve has
+        // nothing to claim. Defaulting to codex labelled every dead tab a Codex agent,
+        // which sends people looking for a session they never started.
+        provider: agent?.provider ?? "",
         title: agent?.title ?? null,
         status: agent?.status ?? null,
         pendingPermissionCount: agent?.pendingPermissions.length ?? 0,
@@ -65,11 +68,12 @@ export function buildAgentDescriptor(input: {
 }): PanelDescriptor {
   const provider = input.provider;
   const label = resolveAgentLabel(input.title);
+  const providerLabel = provider ? `${formatProviderLabel(provider)} agent` : "Agent";
 
   return {
     label: label ?? "",
-    subtitle: `${formatProviderLabel(provider)} agent`,
-    tooltip: label ?? `${formatProviderLabel(provider)} agent`,
+    subtitle: providerLabel,
+    tooltip: label ?? providerLabel,
     titleState: label ? "ready" : "loading",
     icon: input.icon,
     statusBucket: input.status

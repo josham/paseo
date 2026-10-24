@@ -254,6 +254,7 @@ export const ru: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "Агент не найден",
+      notFoundHint: "Возможно, он удалён или его провайдер отключён на этом хосте.",
       failedToLoad: "Не удалось загрузить агента",
       reconnecting: "Повторное подключение к хосту",
       updating: "Обновление сообщений",

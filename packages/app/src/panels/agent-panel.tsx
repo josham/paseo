@@ -229,13 +229,29 @@ function renderChatAgentNonReadyView(args: {
   effectiveAgent: AgentScreenAgent | null;
   t: TFunction;
   onRetryLoad: () => void;
+  onCloseTab: () => void;
 }): React.ReactElement | null {
-  const { viewState, effectiveAgent, t, onRetryLoad } = args;
+  const { viewState, effectiveAgent, t, onRetryLoad, onCloseTab } = args;
   if (viewState.tag === "not_found") {
+    // The host answered "no such agent", so nothing here will ever resolve. The tab is
+    // pinned — an explicit open pins it, and reconciliation keeps a pinned agent exactly
+    // while it is absent — so without a way out it stays forever. Closing goes through the
+    // ordinary close path, which unpins and hides the agent as well.
     return (
       <View style={styles.container} testID="agent-not-found">
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+          <Text style={styles.statusText}>{t("agentPanel.states.notFoundHint")}</Text>
+          <View style={styles.errorAction}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onPress={onCloseTab}
+              testID="agent-not-found-close"
+            >
+              {t("common.actions.close")}
+            </Button>
+          </View>
         </View>
       </View>
     );
@@ -681,6 +697,7 @@ function ChatAgentContent({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
+  const { closeCurrentTab } = usePaneContext();
   const isPaneVisible = useRetainedPanelActive();
   const { api: toastApi, toast: toastState, dismiss: dismissToast } = useToastHost();
   const { isArchivingAgent } = useArchiveAgent();
@@ -992,6 +1009,7 @@ function ChatAgentContent({
     effectiveAgent,
     t,
     onRetryLoad: retryAgentLoad,
+    onCloseTab: closeCurrentTab,
   });
   if (nonReadyView) return nonReadyView;
   invariant(agentId, "agent id is defined when agent content is ready");

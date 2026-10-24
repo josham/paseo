@@ -253,6 +253,7 @@ export const ptBR: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "Agente não encontrado",
+      notFoundHint: "Pode ter sido excluído, ou seu provedor pode estar desativado neste host.",
       failedToLoad: "Falha ao carregar agente",
       reconnecting: "Reconectando ao host",
       updating: "Atualizando mensagens",

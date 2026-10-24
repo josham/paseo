@@ -252,6 +252,7 @@ export const ar: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "لم يتم العثور على Agent",
+      notFoundHint: "ربما تم حذفه، أو ربما يكون المزود الخاص به معطلاً على هذا المضيف.",
       failedToLoad: "فشل تحميل الوكيل",
       reconnecting: "جارٍ إعادة الاتصال بالمضيف",
       updating: "جارٍ تحديث الرسائل",

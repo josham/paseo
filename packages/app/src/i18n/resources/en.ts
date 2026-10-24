@@ -248,6 +248,7 @@ export const en = {
   agentPanel: {
     states: {
       notFound: "Agent not found",
+      notFoundHint: "It may have been deleted, or its provider may be disabled on this host.",
       failedToLoad: "Failed to load agent",
       reconnecting: "Reconnecting to host",
       updating: "Updating messages",

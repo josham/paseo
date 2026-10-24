@@ -83,6 +83,17 @@ describe("shared agent descriptor", () => {
     });
   }
 
+  it("claims no provider for an agent the host cannot resolve", () => {
+    // A tab whose agent is gone has no provider to report. It used to default to codex,
+    // so every dead tab read as a Codex agent the user never started.
+    expect(describeAgent({ provider: "", title: null })).toMatchObject({
+      label: "",
+      subtitle: "Agent",
+      tooltip: "Agent",
+      titleState: "loading",
+    });
+  });
+
   it("keeps the normalized title and provider identity together", () => {
     expect(describeAgent()).toMatchObject({
       label: "Review checkout retries",

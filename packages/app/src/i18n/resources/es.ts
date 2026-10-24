@@ -254,6 +254,8 @@ export const es: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "Agentno encontrado",
+      notFoundHint:
+        "Puede que se haya eliminado, o que su proveedor esté deshabilitado en este host.",
       failedToLoad: "No se pudo cargar el agente",
       reconnecting: "Reconectando al host",
       updating: "Actualizando mensajes",

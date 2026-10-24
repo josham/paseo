@@ -255,6 +255,7 @@ export const fr: TranslationResources = {
   agentPanel: {
     states: {
       notFound: "Agent introuvable",
+      notFoundHint: "Il a peut-être été supprimé, ou son fournisseur est désactivé sur cet hôte.",
       failedToLoad: "Impossible de charger l’agent",
       reconnecting: "Reconnexion à l’hôte…",
       updating: "Mise à jour des messages…",
