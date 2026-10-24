@@ -1,0 +1,19 @@
+# Installs the daemon bundle from the newest Edge release, so the daemon on disk
+# matches the app that just updated itself.
+#
+# Deliberately does NOT restart paseo-daemon. A restart kills every agent the
+# daemon is hosting, including one mid-run, and this unit fires on a file event
+# with no idea whether that is happening. It installs and then says so; the new
+# build takes effect at the next restart you choose, or at the next boot.
+
+[Unit]
+Description=Install the Paseo Edge daemon matching the installed app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/paseo-edge-install-daemon
+# The install is a network fetch plus an npm install; neither is instant, and a
+# failed run must not look like a success.
+TimeoutStartSec=900
