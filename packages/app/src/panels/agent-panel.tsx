@@ -1004,6 +1004,23 @@ function ChatAgentContent({
     visibilityCatchUpStatus,
   ]);
 
+  // A tab whose agent its own host denies is unresolvable by construction — the common
+  // cause is an agent id from another host, which this one will never know. Retiring it
+  // here closes the loop: the close path unpins and hides, so reconciliation stops
+  // re-adding it. The Close button stays for the moment before this runs, and for the
+  // legacy-client case where "not found" can also mean "provider not visible to you".
+  const retiredMissingAgentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewState.tag !== "not_found" || !agentId) {
+      return;
+    }
+    if (retiredMissingAgentRef.current === agentId) {
+      return;
+    }
+    retiredMissingAgentRef.current = agentId;
+    closeCurrentTab();
+  }, [agentId, closeCurrentTab, viewState.tag]);
+
   const nonReadyView = renderChatAgentNonReadyView({
     viewState,
     effectiveAgent,
