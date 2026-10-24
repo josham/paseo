@@ -17,7 +17,8 @@ vi.mock("@react-native-async-storage/async-storage", () => {
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { useSessionStore, type Agent } from "@/stores/session-store";
+import { useSessionStore, type Agent, type WorkspaceDescriptor } from "@/stores/session-store";
+import { seedSessionWorkspaces } from "@/test/seed-session";
 import { setPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
 import { createViewedTimelineSync } from "@/timeline/viewed-timeline-sync";
 import { buildWorkspaceTabPersistenceKey, type WorkspaceTab } from "@/workspace-tabs/model";
@@ -5208,7 +5209,41 @@ describe("pending workspace opens", () => {
 describe("agent tabs and the host that owns the agent", () => {
   const timestamp = new Date("2026-10-24T10:00:00.000Z");
 
-  function seedHostAgents(serverId: string, agentIds: readonly string[]): void {
+  function seedHostWorkspaces(serverId: string, workspaceIds: readonly string[]): void {
+    // The session has to exist before the directory can land in it.
+    useSessionStore.getState().initializeSession(serverId, null as unknown as DaemonClient);
+    seedSessionWorkspaces(
+      serverId,
+      new Map(
+        workspaceIds.map((workspaceId) => [
+          workspaceId,
+          {
+            createdAt: null,
+            lastUserMessageAt: null,
+            id: workspaceId,
+            projectId: "project-1",
+            projectDisplayName: "Project",
+            projectRootPath: "/repo/project",
+            workspaceDirectory: `/repo/project/${workspaceId}`,
+            projectKind: "git",
+            workspaceKind: "worktree",
+            name: workspaceId,
+            status: "done",
+            archivingAt: null,
+            statusEnteredAt: null,
+            diffStat: null,
+            scripts: [],
+          } satisfies WorkspaceDescriptor,
+        ]),
+      ),
+    );
+  }
+
+  function seedHostAgents(
+    serverId: string,
+    agentIds: readonly string[],
+    workspaceId?: string,
+  ): void {
     useSessionStore.getState().initializeSession(serverId, null as unknown as DaemonClient);
     useSessionStore.getState().setAgents(
       serverId,
@@ -5243,6 +5278,7 @@ describe("agent tabs and the host that owns the agent", () => {
             parentAgentId: null,
             archivedAt: null,
             labels: {},
+            ...(workspaceId ? { workspaceId } : {}),
           } satisfies Agent,
         ]),
       ),
@@ -5293,6 +5329,59 @@ describe("agent tabs and the host that owns the agent", () => {
     });
 
     expect(tabId).not.toBeNull();
+    expect(agentTabs(store)).toEqual([{ kind: "agent", agentId: "own-agent" }]);
+  });
+
+  // The other half of the same invariant: an agent tab opened with `pin` into a workspace that
+  // is not the agent's own is kept by reconciliation for as long as the agent is absent from
+  // that workspace — which is forever.
+  it("refuses an agent tab in a workspace its own host does not place the agent in", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostWorkspaces("server-1", ["ws-main", "ws-other"]);
+    seedHostAgents("server-1", ["own-agent"], "ws-other");
+
+    const tabId = store.getState().openTab({
+      workspaceKey: "server-1:ws-main",
+      target: { kind: "agent", agentId: "own-agent" },
+      intent: "reveal",
+    });
+
+    expect(tabId).toBeNull();
+    expect(agentTabs(store)).toEqual([]);
+  });
+
+  it("opens an agent tab in the workspace its host places the agent in", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostWorkspaces("server-1", ["ws-main", "ws-other"]);
+    seedHostAgents("server-1", ["own-agent"], "ws-main");
+
+    expect(
+      store.getState().openTab({
+        workspaceKey: "server-1:ws-main",
+        target: { kind: "agent", agentId: "own-agent" },
+        intent: "reveal",
+      }),
+    ).not.toBeNull();
+    expect(agentTabs(store)).toEqual([{ kind: "agent", agentId: "own-agent" }]);
+  });
+
+  // Deep-linking into an archived workspace is how it gets recovered, and the directory does not
+  // list it. An unplaced workspace has to stay openable.
+  it("opens an agent tab in a workspace the directory does not list", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostWorkspaces("server-1", ["ws-other"]);
+    seedHostAgents("server-1", ["own-agent"], "ws-main");
+
+    expect(
+      store.getState().openTab({
+        workspaceKey: "server-1:ws-main",
+        target: { kind: "agent", agentId: "own-agent" },
+        intent: "reveal",
+      }),
+    ).not.toBeNull();
     expect(agentTabs(store)).toEqual([{ kind: "agent", agentId: "own-agent" }]);
   });
 

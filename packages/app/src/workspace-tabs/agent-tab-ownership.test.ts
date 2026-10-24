@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTargetAgentId,
   getWorkspaceKeyServerId,
+  getWorkspaceKeyWorkspaceId,
   resolveAgentTabOwnership,
   type AgentTabHostKnowledge,
 } from "./agent-tab-ownership";
@@ -30,6 +31,18 @@ describe("getWorkspaceKeyServerId", () => {
   });
 });
 
+describe("getWorkspaceKeyWorkspaceId", () => {
+  it("takes everything after the first colon", () => {
+    expect(getWorkspaceKeyWorkspaceId("srv_kalam:wks_1")).toBe("wks_1");
+    expect(getWorkspaceKeyWorkspaceId("srv_kalam:C:/repo/project")).toBe("C:/repo/project");
+  });
+
+  it("has no workspace without a separator or a name after it", () => {
+    expect(getWorkspaceKeyWorkspaceId("srv_kalam")).toBeNull();
+    expect(getWorkspaceKeyWorkspaceId("srv_kalam:")).toBeNull();
+  });
+});
+
 describe("getTargetAgentId", () => {
   it("names the agent an agent tab asks its host for", () => {
     expect(getTargetAgentId({ kind: "agent", agentId: "agent-1" })).toBe("agent-1");
@@ -52,41 +65,44 @@ describe("getTargetAgentId", () => {
 });
 
 describe("resolveAgentTabOwnership", () => {
+  function resolve(input: {
+    hosts: readonly AgentTabHostKnowledge[];
+    keyWorkspaceKey?: string | null;
+    agentWorkspaceKey?: string | null;
+  }) {
+    return resolveAgentTabOwnership({
+      keyServerId: "srv_kalam",
+      keyWorkspaceKey: input.keyWorkspaceKey ?? null,
+      agentWorkspaceKey: input.agentWorkspaceKey ?? null,
+      hosts: input.hosts,
+    });
+  }
+
   it("allows a host that owns the agent", () => {
     expect(
-      resolveAgentTabOwnership({
-        keyServerId: "srv_kalam",
-        hosts: [host({ knowsAgent: true }), host({ serverId: "srv_fiddler" })],
-      }),
+      resolve({ hosts: [host({ knowsAgent: true }), host({ serverId: "srv_fiddler" })] }),
     ).toEqual({ kind: "allow" });
   });
 
   it("rejects an agent another connected host owns", () => {
     expect(
-      resolveAgentTabOwnership({
-        keyServerId: "srv_kalam",
-        hosts: [host(), host({ serverId: "srv_fiddler", knowsAgent: true })],
-      }),
-    ).toEqual({ kind: "reject", ownerServerId: "srv_fiddler" });
+      resolve({ hosts: [host(), host({ serverId: "srv_fiddler", knowsAgent: true })] }),
+    ).toEqual({ kind: "reject", reason: "foreign-host", ownerServerId: "srv_fiddler" });
   });
 
   // A cold deep link arrives before any host has been asked about the agent. Refusing here would
   // break the URL that is meant to open it.
   it("allows an agent no connected host has a record of", () => {
-    expect(
-      resolveAgentTabOwnership({
-        keyServerId: "srv_kalam",
-        hosts: [host(), host({ serverId: "srv_fiddler" })],
-      }),
-    ).toEqual({ kind: "allow" });
+    expect(resolve({ hosts: [host(), host({ serverId: "srv_fiddler" })] })).toEqual({
+      kind: "allow",
+    });
   });
 
   // "I have no such agent" and "I have not sent you my agents yet" look identical in the store,
   // and a handoff can leave one id known to both hosts for a moment.
   it("allows while the key's host has not hydrated its agents", () => {
     expect(
-      resolveAgentTabOwnership({
-        keyServerId: "srv_kalam",
+      resolve({
         hosts: [
           host({ hasHydratedAgents: false }),
           host({ serverId: "srv_fiddler", knowsAgent: true }),
@@ -96,11 +112,39 @@ describe("resolveAgentTabOwnership", () => {
   });
 
   it("allows when the key's host is not connected at all", () => {
+    expect(resolve({ hosts: [host({ serverId: "srv_fiddler", knowsAgent: true })] })).toEqual({
+      kind: "allow",
+    });
+  });
+
+  it("rejects an agent its own host places in another workspace", () => {
     expect(
-      resolveAgentTabOwnership({
-        keyServerId: "srv_kalam",
-        hosts: [host({ serverId: "srv_fiddler", knowsAgent: true })],
+      resolve({
+        hosts: [host({ knowsAgent: true })],
+        keyWorkspaceKey: "wks_landing",
+        agentWorkspaceKey: "wks_home",
       }),
+    ).toEqual({ kind: "reject", reason: "foreign-workspace", agentWorkspaceKey: "wks_home" });
+  });
+
+  it("allows an agent in the workspace its host places it in", () => {
+    expect(
+      resolve({
+        hosts: [host({ knowsAgent: true })],
+        keyWorkspaceKey: "wks_home",
+        agentWorkspaceKey: "wks_home",
+      }),
+    ).toEqual({ kind: "allow" });
+  });
+
+  // Recovering an archived workspace deep-links into a workspace the directory does not list, so
+  // an unplaced workspace on either side has to let the open through.
+  it.each([
+    ["the agent", "wks_landing", null],
+    ["the key's workspace", null, "wks_home"],
+  ])("allows when the directory does not place %s", (_case, keyWorkspaceKey, agentWorkspaceKey) => {
+    expect(
+      resolve({ hosts: [host({ knowsAgent: true })], keyWorkspaceKey, agentWorkspaceKey }),
     ).toEqual({ kind: "allow" });
   });
 });
