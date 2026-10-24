@@ -196,6 +196,7 @@ import {
   closeBulkWorkspaceTabs,
 } from "@/screens/workspace/workspace-bulk-close";
 import { resolveCloseAgentTabPolicy } from "@/subagents";
+import { findForeignAgentOwner } from "@/workspace-tabs/agent-tab-ownership";
 import {
   getPanelInstanceAttributes,
   useModifiedPanelTabIds,
@@ -1953,6 +1954,19 @@ function WorkspaceScreenContent({
       const { tabId, agentId } = input;
       await closeTab(tabId, async () => {
         if (!normalizedServerId) {
+          return;
+        }
+
+        // An id this host does not own has nothing here to close but the tab: the open-tab label
+        // and the archive both belong to the host that has the agent, and asking this one to write
+        // either fails. Drop the tab and stop.
+        const foreignOwnerServerId = findForeignAgentOwner({
+          keyServerId: normalizedServerId,
+          agentId,
+        });
+        if (foreignOwnerServerId) {
+          setHoveredCloseTabKey((current) => (current === tabId ? null : current));
+          closeWorkspaceTabWithCleanup({ tabId, target: { kind: "agent", agentId } });
           return;
         }
 

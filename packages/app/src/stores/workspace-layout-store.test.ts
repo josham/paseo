@@ -5204,3 +5204,114 @@ describe("pending workspace opens", () => {
     expect(store.getState().pendingOpenByWorkspace).toEqual({});
   });
 });
+
+describe("agent tabs and the host that owns the agent", () => {
+  const timestamp = new Date("2026-10-24T10:00:00.000Z");
+
+  function seedHostAgents(serverId: string, agentIds: readonly string[]): void {
+    useSessionStore.getState().initializeSession(serverId, null as unknown as DaemonClient);
+    useSessionStore.getState().setAgents(
+      serverId,
+      new Map(
+        agentIds.map((agentId) => [
+          agentId,
+          {
+            serverId,
+            id: agentId,
+            provider: "claude",
+            status: "idle",
+            turn: { phase: "idle", cancellationRequestId: null },
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            lastUserMessageAt: null,
+            lastActivityAt: timestamp,
+            capabilities: {
+              supportsStreaming: true,
+              supportsSessionPersistence: true,
+              supportsDynamicModes: true,
+              supportsMcpServers: true,
+              supportsReasoningStream: true,
+              supportsToolInvocations: true,
+            },
+            currentModeId: null,
+            availableModes: [],
+            pendingPermissions: [],
+            persistence: null,
+            title: agentId,
+            cwd: "/repo",
+            model: null,
+            parentAgentId: null,
+            archivedAt: null,
+            labels: {},
+          } satisfies Agent,
+        ]),
+      ),
+    );
+    useSessionStore.getState().setHasHydratedAgents(serverId, true);
+  }
+
+  function agentTabs(store: ReturnType<typeof createWorkspaceLayoutStore>) {
+    return store
+      .getState()
+      .getWorkspaceTabs("server-1:ws-main")
+      .filter((tab) => tab.target.kind === "agent")
+      .map((tab) => tab.target);
+  }
+
+  afterEach(() => {
+    useSessionStore.setState((state) => ({ ...state, sessions: {} }));
+  });
+
+  // The symptom this prevents: a tab in one host's workspace holding another host's agent id. The
+  // host it asks has no such agent, so it can only ever render "Agent not found".
+  it("refuses an agent tab in a workspace whose host does not own the agent", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostAgents("server-1", ["own-agent"]);
+    seedHostAgents("server-2", ["other-host-agent"]);
+
+    const tabId = store.getState().openTab({
+      workspaceKey: "server-1:ws-main",
+      target: { kind: "agent", agentId: "other-host-agent" },
+      intent: "reveal",
+    });
+
+    expect(tabId).toBeNull();
+    expect(agentTabs(store)).toEqual([]);
+  });
+
+  it("opens an agent tab for the host that owns the agent", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostAgents("server-1", ["own-agent"]);
+    seedHostAgents("server-2", ["other-host-agent"]);
+
+    const tabId = store.getState().openTab({
+      workspaceKey: "server-1:ws-main",
+      target: { kind: "agent", agentId: "own-agent" },
+      intent: "reveal",
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(agentTabs(store)).toEqual([{ kind: "agent", agentId: "own-agent" }]);
+  });
+
+  // A deferred open survives a disconnect, so the guard has to hold at the point it is consumed.
+  it("refuses a deferred open of another host's agent when it is consumed", () => {
+    const store = createWorkspaceLayoutStore(workspaceLayoutIds);
+    store.setState({ layoutByWorkspace: {} });
+    seedHostAgents("server-1", []);
+    seedHostAgents("server-2", ["other-host-agent"]);
+
+    store.getState().deferOpenTab({
+      workspaceKey: "server-1:ws-main",
+      target: { kind: "agent", agentId: "other-host-agent" },
+      intent: "reveal",
+      pin: true,
+    });
+
+    expect(store.getState().consumePendingOpen("server-1:ws-main")).toBeNull();
+    expect(agentTabs(store)).toEqual([]);
+    expect(store.getState().pinnedAgentIdsByWorkspace["server-1:ws-main"]).toBeUndefined();
+  });
+});

@@ -67,6 +67,7 @@ import { isSheetTabModified, resolveCompactSheetPolicy } from "@/workspace-tabs/
 import { panelResourceKey, type CompactSheetPolicy } from "@/panels/panel-manifest";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import { panelTargetSupportsHostForWorkspaceKey } from "@/plugins/workspace-panels/locations";
+import { canOpenTargetInWorkspaceKey } from "@/workspace-tabs/agent-tab-ownership";
 
 export {
   AMBIENT_PLACEMENT,
@@ -1076,6 +1077,11 @@ export function createWorkspaceLayoutStore(
           const normalizedWorkspaceKey = trimNonEmpty(input.workspaceKey);
           const normalizedTarget = normalizeWorkspaceTabTarget(input.target);
           if (!normalizedWorkspaceKey || !normalizedTarget) {
+            return null;
+          }
+          // An agent id belongs to one host. A tab for another host's agent can only ever render
+          // "Agent not found", so refuse it here rather than persist it into this workspace.
+          if (!canOpenTargetInWorkspaceKey(normalizedWorkspaceKey, normalizedTarget)) {
             return null;
           }
           const parentTabId = resolveOpenParentTabId(
