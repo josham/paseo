@@ -85,8 +85,9 @@ describe("shared agent descriptor", () => {
 
   it("claims no provider for an agent the host cannot resolve", () => {
     // A tab whose agent is gone has no provider to report. It used to default to codex,
-    // so every dead tab read as a Codex agent the user never started.
-    expect(describeAgent({ provider: "", title: null })).toMatchObject({
+    // so every dead tab read as a Codex agent the user never started. With no record at
+    // all there is nothing to name it with either, so it stays loading until it is retired.
+    expect(describeAgent({ provider: "", title: null, status: null })).toMatchObject({
       label: "",
       subtitle: "Agent",
       tooltip: "Agent",
@@ -104,13 +105,27 @@ describe("shared agent descriptor", () => {
     });
   });
 
+  // Title generation gets one shot, at the first message. An agent that misses it — one made
+  // without a prompt, or whose generation failed — has no title coming, and calling that
+  // "loading" left the tab shimmering for the rest of its life.
   it.each([null, "", "   ", "New Agent", " new agent "])(
-    "leaves an untitled agent loading: %s",
+    "names an untitled agent after its provider rather than waiting forever: %s",
     (title) => {
       expect(resolveAgentLabel(title)).toBeNull();
-      expect(describeAgent({ title })).toMatchObject({ label: "", titleState: "loading" });
+      expect(describeAgent({ title })).toMatchObject({
+        label: "Codex agent",
+        tooltip: "Codex agent",
+        titleState: "ready",
+      });
     },
   );
+
+  it("keeps a tab loading while its agent has not arrived yet", () => {
+    expect(describeAgent({ title: null, status: null })).toMatchObject({
+      label: "",
+      titleState: "loading",
+    });
+  });
 
   it("shows an active turn as running before the lifecycle update arrives", () => {
     expect(describeAgent({ isTurnActive: true }).statusBucket).toBe("running");

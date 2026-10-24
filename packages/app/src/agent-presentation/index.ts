@@ -69,12 +69,17 @@ export function buildAgentDescriptor(input: {
   const provider = input.provider;
   const label = resolveAgentLabel(input.title);
   const providerLabel = provider ? `${formatProviderLabel(provider)} agent` : "Agent";
+  // A title is derived once, from the first message, and an agent that misses that moment never
+  // gets one. Treating "no title" as "still loading" left those tabs shimmering for their whole
+  // life, and the web document title stuck on "Loading". Only an agent this host has no record
+  // of is genuinely unresolved; a known one falls back to what the tooltip has always shown.
+  const isAgentKnown = input.status !== null;
 
   return {
-    label: label ?? "",
+    label: label ?? (isAgentKnown ? providerLabel : ""),
     subtitle: providerLabel,
     tooltip: label ?? providerLabel,
-    titleState: label ? "ready" : "loading",
+    titleState: label || isAgentKnown ? "ready" : "loading",
     icon: input.icon,
     statusBucket: input.status
       ? deriveSidebarStateBucket({
