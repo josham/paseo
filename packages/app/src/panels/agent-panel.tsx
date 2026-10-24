@@ -39,7 +39,7 @@ import {
 } from "@/composer/pill-styles";
 import { getActiveMessageSubmissions } from "@/composer/submission/model";
 import { RewindComposerRestoreProvider } from "@/components/rewind/composer-restore";
-import { useProviderIcon } from "@/components/provider-icons";
+import { useAgentDescriptor } from "@/agent-presentation";
 import { useToastHost, type ToastApi, type ToastState } from "@/components/toast-host";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import { useWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
@@ -62,7 +62,7 @@ import { TimelineSyncStatus } from "@/timeline/sync-status";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
 import { useAgentFactsLine } from "@/panels/agent-facts-line";
 import { PaneSubtitle } from "@/panels/pane-subtitle";
-import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
+import { definePanel } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useHasPluginComposerPills } from "@/plugins";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
@@ -101,7 +101,6 @@ import { getInitDeferred, getInitKey } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
-import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { buildDraftAgentSetup, type ClientSlashCommand } from "@/client-slash-commands";
 
 interface ChatAgentStateShape {
@@ -230,13 +229,29 @@ function renderChatAgentNonReadyView(args: {
   effectiveAgent: AgentScreenAgent | null;
   t: TFunction;
   onRetryLoad: () => void;
+  onCloseTab: () => void;
 }): React.ReactElement | null {
-  const { viewState, effectiveAgent, t, onRetryLoad } = args;
+  const { viewState, effectiveAgent, t, onRetryLoad, onCloseTab } = args;
   if (viewState.tag === "not_found") {
+    // The host answered "no such agent", so nothing here will ever resolve. The tab is
+    // pinned — an explicit open pins it, and reconciliation keeps a pinned agent exactly
+    // while it is absent — so without a way out it stays forever. Closing goes through the
+    // ordinary close path, which unpins and hides the agent as well.
     return (
       <View style={styles.container} testID="agent-not-found">
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+          <Text style={styles.statusText}>{t("agentPanel.states.notFoundHint")}</Text>
+          <View style={styles.errorAction}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onPress={onCloseTab}
+              testID="agent-not-found-close"
+            >
+              {t("common.actions.close")}
+            </Button>
+          </View>
         </View>
       </View>
     );
@@ -254,31 +269,6 @@ function renderChatAgentNonReadyView(args: {
     );
   }
   return null;
-}
-
-function formatProviderLabel(provider: Agent["provider"]): string {
-  if (!provider) {
-    return "Agent";
-  }
-  return provider
-    .split(/[-_\s]+/)
-    .filter((part) => part.length > 0)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function resolveWorkspaceAgentTabLabel(title: string | null | undefined): string | null {
-  if (typeof title !== "string") {
-    return null;
-  }
-  const normalized = title.trim();
-  if (!normalized) {
-    return null;
-  }
-  if (normalized.toLowerCase() === "new agent") {
-    return null;
-  }
-  return normalized;
 }
 
 function shouldStoreFetchedAgentInActiveDirectory(agent: Agent): boolean {
@@ -326,47 +316,6 @@ function storeFetchedAgentDetail(input: {
   });
 
   return hydrated;
-}
-
-function useAgentPanelDescriptor(
-  target: { kind: "agent"; agentId: string },
-  context: { serverId: string },
-): PanelDescriptor {
-  const descriptorState = useSessionStore(
-    useShallow((state) => {
-      const session = state.sessions[context.serverId];
-      const agent =
-        session?.agents?.get(target.agentId) ?? session?.agentDetails?.get(target.agentId) ?? null;
-      return {
-        provider: agent?.provider ?? "codex",
-        title: agent?.title ?? null,
-        status: agent?.status ?? null,
-        pendingPermissionCount: agent?.pendingPermissions.length ?? 0,
-        requiresAttention: agent?.requiresAttention ?? false,
-        attentionReason: agent?.attentionReason ?? null,
-        isTurnActive: selectAgentTurnPresentation(session, target.agentId).isActive,
-      };
-    }),
-  );
-  const provider = descriptorState.provider;
-  const label = resolveWorkspaceAgentTabLabel(descriptorState.title);
-  const icon = useProviderIcon(provider, context.serverId);
-
-  return {
-    label: label ?? "",
-    subtitle: `${formatProviderLabel(provider)} agent`,
-    tooltip: label ?? `${formatProviderLabel(provider)} agent`,
-    titleState: label ? "ready" : "loading",
-    icon,
-    statusBucket: descriptorState.status
-      ? deriveSidebarStateBucket({
-          status: descriptorState.isTurnActive ? "running" : descriptorState.status,
-          pendingPermissionCount: descriptorState.pendingPermissionCount,
-          requiresAttention: descriptorState.requiresAttention,
-          attentionReason: descriptorState.attentionReason,
-        })
-      : null,
-  };
 }
 
 function AgentPanel() {
@@ -438,7 +387,7 @@ export function AgentConversationPanel() {
 
 export const agentPanelRegistration = definePanel("agent", {
   component: AgentConversationPanel,
-  useDescriptor: useAgentPanelDescriptor,
+  useDescriptor: useAgentDescriptor,
 });
 
 export function useDraftPanelDescriptor(
@@ -748,6 +697,7 @@ function ChatAgentContent({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
+  const { closeCurrentTab } = usePaneContext();
   const isPaneVisible = useRetainedPanelActive();
   const { api: toastApi, toast: toastState, dismiss: dismissToast } = useToastHost();
   const { isArchivingAgent } = useArchiveAgent();
@@ -1054,11 +1004,29 @@ function ChatAgentContent({
     visibilityCatchUpStatus,
   ]);
 
+  // A tab whose agent its own host denies is unresolvable by construction — the common
+  // cause is an agent id from another host, which this one will never know. Retiring it
+  // here closes the loop: the close path unpins and hides, so reconciliation stops
+  // re-adding it. The Close button stays for the moment before this runs, and for the
+  // legacy-client case where "not found" can also mean "provider not visible to you".
+  const retiredMissingAgentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewState.tag !== "not_found" || !agentId) {
+      return;
+    }
+    if (retiredMissingAgentRef.current === agentId) {
+      return;
+    }
+    retiredMissingAgentRef.current = agentId;
+    closeCurrentTab();
+  }, [agentId, closeCurrentTab, viewState.tag]);
+
   const nonReadyView = renderChatAgentNonReadyView({
     viewState,
     effectiveAgent,
     t,
     onRetryLoad: retryAgentLoad,
+    onCloseTab: closeCurrentTab,
   });
   if (nonReadyView) return nonReadyView;
   invariant(agentId, "agent id is defined when agent content is ready");
